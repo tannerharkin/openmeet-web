@@ -35,9 +35,14 @@ export default function App() {
             <Diagnostics />
           </main>
         )}
-        <footer className="mt-8 text-center text-xs text-muted-foreground">
-          Independent project, not affiliated with or endorsed by Shokz. Shokz, OpenMeet and Loop120 are trademarks of their respective owners.
-          Use at your own risk.
+        <footer className="mt-8 space-y-1 text-center text-xs text-muted-foreground">
+          <p>
+            <a href="https://github.com/tannerharkin/openmeet-web" className="underline underline-offset-4 hover:text-foreground">Source on GitHub</a>
+          </p>
+          <p>
+            Independent project, not affiliated with or endorsed by Shokz. Shokz, OpenMeet and Loop120 are trademarks of their respective owners.
+            Use at your own risk.
+          </p>
         </footer>
       </div>
       <Toaster theme={theme} richColors closeButton position="bottom-right" />
