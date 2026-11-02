@@ -4,12 +4,44 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <title>Shokz OpenMeet</title>
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a" />
+    <title>OpenMeet Web: control your Shokz OpenMeet from the browser</title>
+    <meta name="description" content="Control your Shokz OpenMeet headset from the browser through the Loop120 dongle: battery, busy light, prompts, EQ, auto power off and paired devices. No app to install. Works in Chrome and Edge." />
+    <link rel="canonical" href="https://openmeet.tannerharkin.com/" />
+    <meta name="robots" content="index,follow" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="OpenMeet Web" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:url" content="https://openmeet.tannerharkin.com/" />
+    <meta property="og:title" content="OpenMeet Web" />
+    <meta property="og:description" content="Control your Shokz OpenMeet headset from the browser. No app to install, nothing for IT to approve. Works in Chrome and Edge." />
+    <meta property="og:image" content="https://openmeet.tannerharkin.com/og.png" />
+    <meta property="og:image:secure_url" content="https://openmeet.tannerharkin.com/og.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="OpenMeet Web: control your Shokz OpenMeet headset from the browser" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="OpenMeet Web" />
+    <meta name="twitter:description" content="Control your Shokz OpenMeet headset from the browser. No app to install, nothing for IT to approve. Works in Chrome and Edge." />
+    <meta name="twitter:image" content="https://openmeet.tannerharkin.com/og.png" />
+    <meta name="twitter:image:alt" content="OpenMeet Web: control your Shokz OpenMeet headset from the browser" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" integrity="sha512-QVs8Lo43F9lSuBykadDb0oSXDL/BbZ588urWVCRwSIoewQv/Ewg1f84mK3U790bZ0FfhFa1YSQUmIhG+pIRKeg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" integrity="sha512-6a1107rTlA4gYpgHAqbwLAtxmWipBdJFcq8y5S/aTge3Bp+VAklABm2LO+Kg51vOWR9JMZq1Ovjl5tpluNpTeQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <noscript>
+        OpenMeet Web controls a Shokz OpenMeet headset from the browser through the Loop120 dongle: battery, busy light,
+        prompts, EQ, auto power off and paired devices, with no app to install. It needs JavaScript and WebHID (Chrome or Edge).
+        <a href="https://github.com/tannerharkin/openmeet-web">Source on GitHub</a>.
+      </noscript>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
