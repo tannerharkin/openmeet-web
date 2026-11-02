@@ -35,6 +35,10 @@ export default function App() {
             <Diagnostics />
           </main>
         )}
+        <footer className="mt-8 text-center text-xs text-muted-foreground">
+          Independent project, not affiliated with or endorsed by Shokz. Shokz, OpenMeet and Loop120 are trademarks of their respective owners.
+          Use at your own risk.
+        </footer>
       </div>
       <Toaster theme={theme} richColors closeButton position="bottom-right" />
     </TooltipProvider>
