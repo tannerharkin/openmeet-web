@@ -13,7 +13,7 @@ export function DetailsSection() {
   const rows: [string, string | undefined][] = [
     ["Dongle", info ? `${info.product} \u00b7 ${info.firmware}` : undefined],
     ["Dongle address", info?.address],
-    ["Headset", info?.headsetModel ? `${profile?.model ?? ""} ${info.headsetModel}${headset ? ` \u00b7 ${headset.firmware}` : ""}`.trim() : undefined],
+    ["Headset", info?.headsetModel || profile ? `${profile?.model ?? ""} ${info?.headsetModel ?? ""}${headset ? ` \u00b7 ${headset.firmware}` : ""}`.replace(/\s+/g, " ").trim() : undefined],
     ["Prompt language", headset?.language],
   ];
   const copy = async () => {

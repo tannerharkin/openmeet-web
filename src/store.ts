@@ -7,14 +7,15 @@ import { describeNotification, hex, notificationName, sleep, type Frame, type He
 import {
   assertHeadsetIdle, connectDevice, disconnectDevice, ensureHeadsetChannel, forgetDevice, pairHeadset, parseFoundHeadset, previewPrompt,
   readChannelStatus, readDongleInfo, readHeadsetDevices, readHeadsetLinked, readHeadsetStatus, readSettings, startPairing, startScan,
-  stopPairing, stopScan, unpairDongle, writeSetting,
+  removePairedHeadset, stopPairing, stopScan, unpairDongle, UnpairIncompleteError, writeSetting,
   type DongleInfo, type FoundHeadset, type HeadsetStatus, type PairedDevice, type SettingChange, type Settings,
 } from "@/protocol/commands";
 
 export type Phase = "disconnected" | "unlinked" | "connected";
 export type LogLevel = "info" | "action" | "notify" | "error" | "drop" | "raw";
-export interface LogLine { id: number; time: string; text: string; level: LogLevel }
-export interface LastError { label: string; message: string; retry?: () => Promise<void> }
+export interface LogLine { id: number; ts: number; text: string; level: LogLevel }
+// sticky: the error stands until its own action succeeds (an unrelated success must not hide its Retry).
+export interface LastError { label: string; message: string; retry?: () => Promise<void>; sticky?: boolean }
 export type RowState = "pending" | "saved" | "kept";
 
 interface State {
@@ -41,7 +42,7 @@ interface State {
   diagnosticsOpen: boolean;
 
   connect(): Promise<void>;
-  reconnectPermitted(): Promise<void>;
+  reconnectPermitted(device?: HIDDevice): Promise<void>;
   disconnect(): Promise<void>;
   // Disconnects and revokes the page's permission, so the browser asks again on the next connect.
   forgetDongle(): Promise<void>;
@@ -74,7 +75,7 @@ const SETTING_LABEL: Record<SettingChange["name"], string> = {
   autoOffMinutes: "Auto power off", multipoint: "Multipoint",
 };
 const describeValue = (value: Settings[keyof Settings]) =>
-  typeof value === "boolean" ? (value ? "on" : "off") : typeof value === "number" ? (value === 0 ? "never" : `${value} min`) : value;
+  value === null ? "an unknown value" : typeof value === "boolean" ? (value ? "on" : "off") : typeof value === "number" ? (value === 0 ? "never" : `${value} min`) : value;
 
 let nextLogId = 1;
 const DIAGNOSTICS_KEY = "shokz-diagnostics-open";
@@ -94,7 +95,7 @@ export const deviceLabel = (verb: string, device: { name: string; address: strin
 
 export const useStore = create<State>((set, get) => {
   const append = (text: string, level: LogLevel = "info") =>
-    set((s) => ({ log: [...s.log.slice(-499), { id: nextLogId++, time: new Date().toLocaleTimeString(undefined, { hour12: false }), text, level }] }));
+    set((s) => ({ log: [...s.log.slice(-499), { id: nextLogId++, ts: Date.now(), text, level }] }));
 
   // Names of notification-driven refreshes already queued, so a burst of notifications runs one refresh.
   const queuedRefresh = new Set<string>();
@@ -112,6 +113,11 @@ export const useStore = create<State>((set, get) => {
   // replug or boot and steal it from the tab in use. Only an explicit connect() clears it.
   let refusedByOtherTab = false;
   let runtimeErrors = 0;
+  // The pair attempt waiting for its outcome, and a PairResult failure reported for that address.
+  let pairingAddress: string | null = null;
+  let pairFailedAddress: string | null = null;
+  // Per setting row: changes still queued, and the value from before the first of them (what a failure restores).
+  const pendingRows = new Map<SettingChange["name"], { count: number; baseline: Settings[keyof Settings] | undefined }>();
 
   // Ends pairing mode / scanning after OPEN_WINDOW_MS unless the user or a result ended it first.
   // An operation still running (e.g. a pair waiting for the headset) postpones the stop a little.
@@ -174,15 +180,16 @@ export const useStore = create<State>((set, get) => {
   // during another operation is queued, not refused, so nothing on the page needs to be disabled;
   // the control that was used shows its own spinner via `inFlight` until its turn is done.
   let chain: Promise<unknown> = Promise.resolve();
-  const guarded = (label: string, action: (dongle: Dongle) => Promise<void>): Promise<void> => {
+  // `retry` is what the error's Retry runs; by default the same action again.
+  const guarded = (label: string, action: (dongle: Dongle) => Promise<void>, retry: () => Promise<void> = () => guarded(label, action)): Promise<void> => {
     if (!get().dongle) return Promise.resolve();
     set((st) => ({ inFlight: { ...st.inFlight, [label]: true } }));
-    const run = () => runGuarded(label, action);
+    const run = () => runGuarded(label, action, retry);
     const result = chain.then(run, run);
     chain = result.catch(() => {});
     return result;
   };
-  const runGuarded = async (label: string, action: (dongle: Dongle) => Promise<void>): Promise<void> => {
+  const runGuarded = async (label: string, action: (dongle: Dongle) => Promise<void>, retry: () => Promise<void>): Promise<void> => {
     const { dongle } = get();
     if (!dongle) { clearInFlight(label); return; }
     set({ busy: label, busyDetail: null });
@@ -191,12 +198,11 @@ export const useStore = create<State>((set, get) => {
     try {
       await action(dongle);
       append(`${label} done (${Math.round(performance.now() - started)} ms)`, "action");
-      set({ lastError: null });
+      set((s) => (s.lastError?.sticky && s.lastError.label !== label ? {} : { lastError: null }));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       append(`${label} failed: ${message}`, "error");
-      const retry = () => guarded(label, action);
-      set({ lastError: { label, message, retry } });
+      set({ lastError: { label, message, retry, sticky: error instanceof UnpairIncompleteError } });
       // Persistent (until dismissed) so it cannot be missed, but a toast so nothing on the page moves.
       if (get().phase === "connected") toast.error(`${label} failed`, { description: message, duration: Infinity, action: { label: "Retry", onClick: () => void retry() } });
     } finally {
@@ -237,7 +243,8 @@ export const useStore = create<State>((set, get) => {
       const { dongle, phase, busy } = get();
       if (!dongle || phase !== "unlinked" || busy) return;
       try {
-        if (await readHeadsetLinked(dongle)) { stopLinkPolling(); void guarded("Headset linked", refreshAll); }
+        // Re-checked after the reply: the BluetoothLink notification may already have queued the refresh.
+        if (await readHeadsetLinked(dongle) && get().phase === "unlinked" && pollTimer) { stopLinkPolling(); queueRefresh("Dongle.BluetoothLink"); }
       } catch { /* the next tick retries; a dead dongle surfaces through the disconnect event */ }
     }, 3000);
   };
@@ -276,7 +283,11 @@ export const useStore = create<State>((set, get) => {
       const headset = parseFoundHeadset(frame.value);
       set((st) => (st.found.length >= MAX_FOUND || st.found.some((h) => h.address === headset.address) ? {} : { found: [...st.found, headset] }));
     }
-    if (name === "Dongle.PairResult" && frame.value[6] === 1) toast.error("Pairing failed", { description: "Put the headset in pairing mode and try again." });
+    if (name === "Dongle.PairResult" && frame.value[6] === 1) {
+      const address = hex(frame.value.subarray(0, 6), ":");
+      if (address === pairingAddress) pairFailedAddress = address;
+      else toast.error("Pairing failed", { description: "Put the headset in pairing mode and try again." });
+    }
     if (name === "Dongle.BluetoothLink" && frame.value[6] === 1 && get().scanning) { clearTimeout(scanTimer); set({ scanning: false, found: [] }); queueRefresh("stopScan"); }
     if (name === "Dongle.ControlChannel" && frame.value[8] !== 1) set({ headsetReady: false });
     if (name === "Dongle.BluetoothLink" && frame.value[6] !== 1) set({ headsetReady: false, phase: "unlinked", headset: null, settings: null, devices: [] });
@@ -300,10 +311,10 @@ export const useStore = create<State>((set, get) => {
     toast.warning(`${device.name || "Unnamed device"} did not ${wantConnected ? "connect" : "disconnect"}`, { description: wantConnected ? "Make sure it is nearby with Bluetooth on." : undefined });
   };
 
-  const withDeviceBusy = (device: PairedDevice, label: string, action: (dongle: Dongle) => Promise<void>) => {
+  const withDeviceBusy = (device: PairedDevice, label: string, action: (dongle: Dongle) => Promise<void>): Promise<void> => {
     set((st) => ({ deviceBusy: { ...st.deviceBusy, [device.address]: true } }));
     const release = () => set((st) => { const deviceBusy = { ...st.deviceBusy }; delete deviceBusy[device.address]; return { deviceBusy }; });
-    return guarded(label, (dongle) => action(dongle).finally(release)).finally(release);
+    return guarded(label, (dongle) => action(dongle).finally(release), () => withDeviceBusy(device, label, action)).finally(release);
   };
 
   const adopt = async (dongle: Dongle) => {
@@ -329,6 +340,7 @@ export const useStore = create<State>((set, get) => {
     queuedRefresh.clear();
     const { dongle } = get();
     if (dongle) void dongle.close(reason);
+    pendingRows.clear();
     set({ dongle: null, phase: "disconnected", headsetReady: false, info: null, profile: null, headset: null, settings: null, devices: [], busy: null, busyDetail: null, inFlight: {}, deviceBusy: {}, pairingRequested: false, scanning: false, found: [], rowState: {} });
     append(reason);
   };
@@ -341,7 +353,7 @@ export const useStore = create<State>((set, get) => {
       }
     });
     navigator.hid.addEventListener("connect", (event) => {
-      if (!get().dongle && !refusedByOtherTab && Dongle.isControlCollection(event.device)) void get().reconnectPermitted();
+      if (!get().dongle && !refusedByOtherTab && Dongle.isControlCollection(event.device)) void get().reconnectPermitted(event.device);
     });
   }
 
@@ -376,14 +388,14 @@ export const useStore = create<State>((set, get) => {
       await adopt(dongle);
     },
 
-    reconnectPermitted() {
+    reconnectPermitted(device) {
       if (reopening) return reopening;
       reopening = (async () => {
         // Not after a manual disconnect or a lock refusal in this tab, and never inside another site's frame.
         if (get().dongle || manualDisconnect || readSession(MANUAL_KEY) || refusedByOtherTab || framed) return;
         if (!(await acquireLock())) { lockRefused(); return; }
         try {
-          const dongle = await Dongle.reopenPermitted();
+          const dongle = await Dongle.reopenPermitted(device);
           const current = get().dongle;
           if (dongle && !current) await adopt(dongle);
           else {
@@ -429,21 +441,35 @@ export const useStore = create<State>((set, get) => {
     retry: async () => { const retry = get().lastError?.retry; if (retry) await retry(); else await get().refresh(); },
 
     changeSetting: (change) => {
+      if (!get().dongle) return Promise.resolve();  // nothing would run, so nothing may be marked pending
+      const row = pendingRows.get(change.name) ?? { count: 0, baseline: get().settings?.[change.name] };
+      row.count++;
+      pendingRows.set(change.name, row);
       // Reflect the choice at once and mark the row pending; the headset's answer replaces it later.
       set((st) => ({ settings: st.settings ? { ...st.settings, [change.name]: change.value } : st.settings, rowState: { ...st.rowState, [change.name]: "pending" } }));
       return guarded(`Set ${SETTING_LABEL[change.name]}`, async (dongle) => {
-      const profile = get().profile;
-      if (!profile) throw new Error("The headset's control channel is not open.");
+      const settle = () => { row.count--; if (row.count === 0 && pendingRows.get(change.name) === row) pendingRows.delete(change.name); return row.count > 0; };
       try {
+        const profile = get().profile;
+        if (!profile) throw new Error("The headset's control channel is not open.");
         await writeSetting(dongle, profile, change);
         const settings = await readSettings(dongle, profile);  // show what the headset actually applied
         const applied = settings[change.name] === change.value;
-        set((s) => ({ settings, rowState: { ...s.rowState, [change.name]: applied ? "saved" : "kept" } }));
+        row.baseline = settings[change.name];
+        // A later change to the same row is still queued: keep showing that choice until it lands.
+        const later = settle();
+        set((s) => later
+          ? { settings: { ...settings, [change.name]: s.settings?.[change.name] ?? settings[change.name] } }
+          : { settings, rowState: { ...s.rowState, [change.name]: applied ? "saved" : "kept" } });
         if (applied) toast.success(`${SETTING_LABEL[change.name]}: ${describeValue(change.value)}`);
         else toast.warning(`${SETTING_LABEL[change.name]}: headset kept ${describeValue(settings[change.name])}`);
-        if (applied) setTimeout(() => set((s) => (s.rowState[change.name] === "saved" ? { rowState: { ...s.rowState, [change.name]: undefined } } : {})), 2500);
+        if (applied && !later) setTimeout(() => set((s) => (s.rowState[change.name] === "saved" ? { rowState: { ...s.rowState, [change.name]: undefined } } : {})), 2500);
       } catch (error) {
-        set((s) => ({ rowState: { ...s.rowState, [change.name]: undefined } }));
+        // Back to the last value the headset confirmed, once no later change to this row is queued.
+        if (!settle()) set((s) => ({
+          settings: s.settings && s.settings[change.name] === change.value ? { ...s.settings, [change.name]: row.baseline } as Settings : s.settings,
+          rowState: { ...s.rowState, [change.name]: undefined },
+        }));
         throw error;
       }
       });
@@ -486,16 +512,30 @@ export const useStore = create<State>((set, get) => {
       await settleDevices(dongle, device, true);
     }),
 
-    unpairDongle: () => guarded("Unpair this computer", async (dongle) => {
-      const { info, profile } = get();
-      if (!info || !profile) throw new Error("The headset's control channel is not open.");
-      const channel = await readChannelStatus(dongle, profile.channelUuid);
-      await assertHeadsetIdle(dongle);  // the vendor app refuses connection changes during a call
-      await unpairDongle(dongle, info.address, hex(channel.headsetAddress, ":"));
-      set({ phase: "unlinked", headsetReady: false, profile: null, headset: null, settings: null, devices: [] });
-      startLinkPolling();
-      toast.success("Unpaired", { description: "Pair the headset again from this panel when you need it." });
-    }),
+    unpairDongle: () => {
+      const label = "Unpair this computer";
+      const unpaired = () => {
+        set({ phase: "unlinked", headsetReady: false, profile: null, headset: null, settings: null, devices: [] });
+        startLinkPolling();
+        toast.success("Unpaired", { description: "Pair the headset again from this panel when you need it." });
+      };
+      // The headset has already forgotten us: only the dongle's side is left to remove.
+      const removeRest = (address: string): Promise<void> =>
+        guarded(label, async (dongle) => { await removePairedHeadset(dongle, address); unpaired(); }, () => removeRest(address));
+      let remaining: string | null = null;
+      const run = (): Promise<void> => guarded(label, async (dongle) => {
+        const { info, profile } = get();
+        if (!info || !profile) throw new Error("The headset's control channel is not open.");
+        const channel = await readChannelStatus(dongle, profile.channelUuid);
+        await assertHeadsetIdle(dongle);  // the vendor app refuses connection changes during a call
+        try { await unpairDongle(dongle, info.address, hex(channel.headsetAddress, ":")); } catch (error) {
+          if (error instanceof UnpairIncompleteError) remaining = error.headsetAddress;
+          throw error;
+        }
+        unpaired();
+      }, () => (remaining ? removeRest(remaining) : run()));
+      return run();
+    },
 
     startScan: () => guarded("Search for headsets", async (dongle) => {
       // Marked first: results can arrive before the command's answer and are ignored unless scanning.
@@ -513,9 +553,16 @@ export const useStore = create<State>((set, get) => {
     // The outcome arrives as notifications: PairResult (failure) or BluetoothLink (success, which
     // stops the scan and reads the headset like any other link).
     pairHeadset: (headset) => guarded(deviceLabel("Pair", headset, "Unnamed headset"), async (dongle) => {
-      await pairHeadset(dongle, headset.address);
-      set({ busyDetail: "Waiting for the headset to accept" });
-      for (let attempt = 0; attempt < 10 && get().scanning; attempt++) await sleep(1000);
+      pairingAddress = headset.address;
+      pairFailedAddress = null;
+      try {
+        await pairHeadset(dongle, headset.address);
+        set({ busyDetail: "Waiting for the headset to accept" });
+        for (let attempt = 0; attempt < 10 && get().scanning && pairFailedAddress !== headset.address; attempt++) await sleep(1000);
+        if (pairFailedAddress === headset.address) throw new Error("Put the headset in pairing mode and try again.");
+      } finally {
+        pairingAddress = null;
+      }
     }),
 
     forget: (device) => withDeviceBusy(device, deviceLabel("Forget", device), async (dongle) => {
@@ -534,6 +581,6 @@ export const useStore = create<State>((set, get) => {
       if (++runtimeErrors === MAX_RUNTIME_ERRORS) text += " (further errors not logged)";
       append(text, "error");
     },
-    logText: () => get().log.map((l) => `${l.time}\t${l.level}\t${l.text}`).join("\n"),
+    logText: () => get().log.map((l) => `${new Date(l.ts).toISOString()}\t${l.level}\t${l.text}`).join("\n"),
   };
 });

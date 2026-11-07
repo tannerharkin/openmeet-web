@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Loader2, Play, SlidersHorizontal } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -21,11 +20,12 @@ const autoOffLabel = (m: number) => (m === 0 ? "Never" : m < 60 ? `${m} min` : `
 
 export function SettingsCard() {
   const { settings: s, headsetReady, rowState, changeSetting, preview, isInFlight } = useStore();
-  const [sampleVolume, setSampleVolume] = useState<PromptVolume | null>(null);
   const disabled = !headsetReady || !s;
   const playing = isInFlight("Play sample prompt");
   const promptsOff = s?.prompt === "Off";
-  const volume = sampleVolume ?? s?.promptVolume ?? "Medium";
+  const volume = s?.promptVolume ?? null;
+  // An unknown headset volume still previews, at the middle level.
+  const sampleVolume: PromptVolume = volume ?? "Medium";
   const toggleRow = (t: Toggle) => (
     <SettingRow key={t.name} id={t.name} label={t.label} hint={t.hint} state={rowState[t.name]}>
       <Switch id={t.name} aria-labelledby={`${t.name}-label`} aria-describedby={t.hint ? `${t.name}-hint` : undefined} checked={s?.[t.name] ?? false} disabled={disabled}
@@ -50,15 +50,15 @@ export function SettingsCard() {
           <SettingRow id="promptVolume" label="Prompt volume" state={rowState.promptVolume}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" aria-disabled={disabled || promptsOff} aria-label={`Play a sample prompt at ${volume} volume`}
-                        onClick={() => { if (!disabled && !promptsOff && !playing) void preview(volume); }}>
+                <Button variant="ghost" size="icon" aria-disabled={disabled || promptsOff} aria-label={`Play a sample prompt at ${sampleVolume} volume`}
+                        onClick={() => { if (!disabled && !promptsOff && !playing) void preview(sampleVolume); }}>
                   {playing ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <Play aria-hidden />}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Play a sample</TooltipContent>
             </Tooltip>
-            <Select value={volume} disabled={disabled || promptsOff}
-                    onValueChange={(v) => { setSampleVolume(v as PromptVolume); void changeSetting({ name: "promptVolume", value: v as PromptVolume }); }}>
+            <Select value={volume ?? ""} disabled={disabled || promptsOff}
+                    onValueChange={(v) => void changeSetting({ name: "promptVolume", value: v as PromptVolume })}>
               <SelectTrigger id="promptVolume" aria-labelledby="promptVolume-label" className="w-32"><SelectValue placeholder="-" /></SelectTrigger>
               <SelectContent><SelectItem value="High">High</SelectItem><SelectItem value="Medium">Medium</SelectItem><SelectItem value="Low">Low</SelectItem></SelectContent>
             </Select>

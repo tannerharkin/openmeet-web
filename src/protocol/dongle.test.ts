@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Dongle } from "./dongle";
-import { DONGLE_GET, REPLY_TIMEOUT_MS, buildFrame } from "./frames";
+import { DONGLE_GET, PRODUCT_ID, REPLY_TIMEOUT_MS, VENDOR_ID, buildFrame } from "./frames";
 
 class FakeDevice extends EventTarget {
   opened = true;
@@ -116,5 +116,32 @@ describe("Dongle", () => {
     expect(device.sendReport).toHaveBeenCalledTimes(1);
     expect(device.close).toHaveBeenCalled();
     await expect(dongle.dongleGet(DONGLE_GET.address)).rejects.toThrow("Unplugged");
+  });
+});
+
+describe("Dongle.reopenPermitted", () => {
+  const hid = (vendorId: number, productId: number, usage = 0x01) =>
+    Object.assign(new FakeDevice(), { vendorId, productId, opened: false, open: vi.fn(async function (this: FakeDevice) { this.opened = true; }),
+      collections: [{ usagePage: 0x0c, usage, outputReports: [] }] });
+  const stubHid = (devices: unknown[]) => vi.stubGlobal("navigator", { hid: { getDevices: vi.fn(async () => devices) } });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("uses the given control collection and opens it", async () => {
+    const given = hid(VENDOR_ID, PRODUCT_ID);
+    stubHid([hid(VENDOR_ID, PRODUCT_ID)]);
+    const dongle = await Dongle.reopenPermitted(given as unknown as HIDDevice);
+    expect(dongle?.device).toBe(given);
+    expect(given.open).toHaveBeenCalledOnce();
+  });
+  it("falls back to the first permitted control collection", async () => {
+    const other = hid(VENDOR_ID, PRODUCT_ID, 0x02);
+    const permitted = hid(VENDOR_ID, PRODUCT_ID);
+    stubHid([hid(1, 2), other, permitted]);
+    expect((await Dongle.reopenPermitted(other as unknown as HIDDevice))?.device).toBe(permitted);
+    expect((await Dongle.reopenPermitted())?.device).toBe(permitted);
+  });
+  it("returns null when nothing is permitted", async () => {
+    stubHid([hid(1, 2)]);
+    expect(await Dongle.reopenPermitted()).toBeNull();
   });
 });
