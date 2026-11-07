@@ -38,6 +38,16 @@ The dongle exposes a HID collection (usage page `0x0C`, usage `0x01`) that carri
 - `src/store.ts`: application state and the actions the UI calls
 - `src/components/`: the interface (React, Tailwind, shadcn/ui)
 
+## Security & privacy
+
+There is no backend, account or telemetry. The page loads from its own origin plus React from cdnjs (pinned with Subresource Integrity) and contacts nothing else.
+
+It stores only UI preferences in `localStorage` (`shokz-theme`, `shokz-diagnostics-open`) and a `sessionStorage` flag remembering that you disconnected manually. Device data (Bluetooth addresses and names of paired devices) stays in the browser, except when you copy or download the diagnostics log, which contains them.
+
+The browser remembers the dongle permission, so the page reconnects automatically on later visits. To revoke it, use **Forget this dongle**, or remove the device under site settings → HID devices in Chrome/Edge (`chrome://settings/content/hidDevices`).
+
+See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+
 ## License
 
 [Standard MIT License](LICENSE)

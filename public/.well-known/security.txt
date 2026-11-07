@@ -1,0 +1,5 @@
+Contact: https://github.com/tannerharkin/openmeet-web/security/advisories/new
+Expires: 2027-11-06T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://openmeet.tannerharkin.com/.well-known/security.txt
+Policy: https://github.com/tannerharkin/openmeet-web/blob/main/SECURITY.md
