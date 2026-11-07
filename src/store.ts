@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { toast } from "sonner";
 import { Dongle } from "@/protocol/dongle";
+import { readLocal, readSession, removeSession, writeLocal, writeSession } from "@/lib/storage";
+import { framed } from "@/lib/env";
 import { describeNotification, hex, notificationName, sleep, type Frame, type HeadsetProfile, type PromptVolume } from "@/protocol/frames";
 import {
   assertHeadsetIdle, connectDevice, disconnectDevice, ensureHeadsetChannel, forgetDevice, pairHeadset, parseFoundHeadset, previewPrompt,
@@ -41,6 +43,8 @@ interface State {
   connect(): Promise<void>;
   reconnectPermitted(): Promise<void>;
   disconnect(): Promise<void>;
+  // Disconnects and revokes the page's permission, so the browser asks again on the next connect.
+  forgetDongle(): Promise<void>;
   refresh(): Promise<void>;
   retry(): Promise<void>;
   dismissError(): void;
@@ -60,6 +64,7 @@ interface State {
   setShowRaw(show: boolean): void;
   setDiagnosticsOpen(open: boolean): void;
   clearLog(): void;
+  logError(text: string): void;
   logText(): string;
 }
 
@@ -73,6 +78,19 @@ const describeValue = (value: Settings[keyof Settings]) =>
 
 let nextLogId = 1;
 const DIAGNOSTICS_KEY = "shokz-diagnostics-open";
+// Set by a manual disconnect/forget: no automatic reopen for the rest of this tab's session.
+const MANUAL_KEY = "openmeet-manual-disconnect";
+// One tab at a time drives the dongle; two would interleave requests and steal each other's answers.
+const LOCK_NAME = "openmeet-loop120";
+// Pairing mode and scanning leave the headset/dongle open to strangers; end them on our side after this.
+const OPEN_WINDOW_MS = 180_000;
+const MAX_FOUND = 32;
+const MAX_RUNTIME_ERRORS = 50;
+
+// Label of a per-device operation. It doubles as the `inFlight` key, so the address keeps two devices
+// with the same (device-chosen) name apart.
+export const deviceLabel = (verb: string, device: { name: string; address: string }, unnamed = "Unnamed device") =>
+  `${verb} ${device.name || unnamed} (${device.address})`;
 
 export const useStore = create<State>((set, get) => {
   const append = (text: string, level: LogLevel = "info") =>
@@ -82,6 +100,75 @@ export const useStore = create<State>((set, get) => {
   const queuedRefresh = new Set<string>();
   const warnedModels = new Set<string>();
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pairingTimer: ReturnType<typeof setTimeout> | undefined;
+  let scanTimer: ReturnType<typeof setTimeout> | undefined;
+  let lockHeld = false;                         // this tab holds the Web Lock (or Web Locks are unavailable)
+  let lockPending: Promise<boolean> | null = null;  // an acquisition in progress; same-tab callers share it
+  let releaseLock: (() => void) | null = null;  // resolves the Web Lock callback, releasing the lock
+  let reopening: Promise<void> | null = null;   // single-flight reconnectPermitted (boot + HID connect event)
+  // Also kept in memory: with storage blocked the session flag is never written.
+  let manualDisconnect = false;
+  // Set when another tab held the lock: this (likely background) tab must not grab the dongle on a
+  // replug or boot and steal it from the tab in use. Only an explicit connect() clears it.
+  let refusedByOtherTab = false;
+  let runtimeErrors = 0;
+
+  // Ends pairing mode / scanning after OPEN_WINDOW_MS unless the user or a result ended it first.
+  // An operation still running (e.g. a pair waiting for the headset) postpones the stop a little.
+  const armPairingCap = (delay = OPEN_WINDOW_MS) => {
+    clearTimeout(pairingTimer);
+    pairingTimer = setTimeout(() => {
+      const { dongle, pairingRequested, busy } = get();
+      if (!dongle || !pairingRequested) return;
+      if (busy) { armPairingCap(10_000); return; }
+      append("Pairing mode ended after 3 minutes");
+      void get().stopPairing();
+    }, delay);
+  };
+  const armScanCap = (delay = OPEN_WINDOW_MS) => {
+    clearTimeout(scanTimer);
+    scanTimer = setTimeout(() => {
+      const { dongle, scanning, busy } = get();
+      if (!dongle || !scanning) return;
+      if (busy) { armScanCap(10_000); return; }
+      append("Search for headsets ended after 3 minutes");
+      void get().stopScan();
+    }, delay);
+  };
+
+  // Resolves false when another tab holds the dongle. Without Web Locks, every tab may proceed.
+  // A second caller while an acquisition is pending awaits the same result instead of assuming ownership.
+  const acquireLock = (): Promise<boolean> => {
+    if (lockHeld) return Promise.resolve(true);
+    if (lockPending) return lockPending;
+    const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+    if (!locks) { lockHeld = true; return Promise.resolve(true); }
+    lockPending = new Promise<boolean>((resolve) => {
+      locks.request(LOCK_NAME, { ifAvailable: true }, (lock) => {
+        if (!lock) { resolve(false); return; }
+        lockHeld = true;
+        resolve(true);
+        return new Promise<void>((done) => { releaseLock = done; });
+      }).catch(() => { lockHeld = true; resolve(true); });
+    }).finally(() => { lockPending = null; });
+    return lockPending;
+  };
+  const freeLock = () => { releaseLock?.(); releaseLock = null; lockHeld = false; };
+  const lockRefused = () => {
+    refusedByOtherTab = true;
+    const message = "The dongle is in use in another tab of this page. Close that tab or disconnect there, then connect here.";
+    append(`Connect: ${message}`, "error");
+    set({ lastError: { label: "Connect", message } });
+  };
+
+  // Before a manual close: leave pairing mode / stop scanning so the headset is not left discoverable.
+  // Best effort with a short timeout; the dongle is closed regardless.
+  const endOpenWindows = async () => {
+    const { dongle, pairingRequested, scanning } = get();
+    if (!dongle) return;
+    if (pairingRequested) await Promise.race([stopPairing(dongle).catch(() => {}), sleep(1500)]);
+    if (scanning) await Promise.race([stopScan(dongle).catch(() => {}), sleep(1500)]);
+  };
 
   // Runs device operations one after another (the headset accepts one request at a time). A click
   // during another operation is queued, not refused, so nothing on the page needs to be disabled;
@@ -122,9 +209,12 @@ export const useStore = create<State>((set, get) => {
   const refreshAll = async (dongle: Dongle) => {
     set({ busyDetail: "Reading dongle" });
     const info = await readDongleInfo(dongle);
-    set({ info, pairingRequested: false });
+    // Pairing state is owned by stopPairing, the DeviceConnection handler and disconnected(); a refresh
+    // only drops it when the headset is gone (then it is no longer discoverable through us).
+    set({ info });
     if (!info.headsetLinked) {
-      set({ phase: "unlinked", headsetReady: false, profile: null, headset: null, settings: null, devices: [] });
+      clearTimeout(pairingTimer);
+      set({ pairingRequested: false, phase: "unlinked", headsetReady: false, profile: null, headset: null, settings: null, devices: [] });
       startLinkPolling();
       return;
     }
@@ -176,16 +266,18 @@ export const useStore = create<State>((set, get) => {
       const known = get().devices.some((d) => d.address === hex(frame.value.subarray(0, 6), ":"));
       if (!known) {
         set({ pairingRequested: false });
+        clearTimeout(pairingTimer);
         toast.success("Paired", { description: describeNotification(frame) });
         queueRefresh("stopPairing");
       }
     }
-    if (name === "Dongle.ScanResult") {
+    // Results are only expected while we asked for them; a flood of fake ones is capped.
+    if (name === "Dongle.ScanResult" && get().scanning) {
       const headset = parseFoundHeadset(frame.value);
-      set((st) => (st.found.some((h) => h.address === headset.address) ? {} : { found: [...st.found, headset] }));
+      set((st) => (st.found.length >= MAX_FOUND || st.found.some((h) => h.address === headset.address) ? {} : { found: [...st.found, headset] }));
     }
     if (name === "Dongle.PairResult" && frame.value[6] === 1) toast.error("Pairing failed", { description: "Put the headset in pairing mode and try again." });
-    if (name === "Dongle.BluetoothLink" && frame.value[6] === 1 && get().scanning) { set({ scanning: false, found: [] }); queueRefresh("stopScan"); }
+    if (name === "Dongle.BluetoothLink" && frame.value[6] === 1 && get().scanning) { clearTimeout(scanTimer); set({ scanning: false, found: [] }); queueRefresh("stopScan"); }
     if (name === "Dongle.ControlChannel" && frame.value[8] !== 1) set({ headsetReady: false });
     if (name === "Dongle.BluetoothLink" && frame.value[6] !== 1) set({ headsetReady: false, phase: "unlinked", headset: null, settings: null, devices: [] });
     if (refreshers[name]) queueRefresh(name);
@@ -205,7 +297,7 @@ export const useStore = create<State>((set, get) => {
       const now = devices.find((d) => d.address === device.address);
       if (!now || now.connected === wantConnected) return;
     }
-    toast.warning(`${device.name} did not ${wantConnected ? "connect" : "disconnect"}`, { description: wantConnected ? "Make sure it is nearby with Bluetooth on." : undefined });
+    toast.warning(`${device.name || "Unnamed device"} did not ${wantConnected ? "connect" : "disconnect"}`, { description: wantConnected ? "Make sure it is nearby with Bluetooth on." : undefined });
   };
 
   const withDeviceBusy = (device: PairedDevice, label: string, action: (dongle: Dongle) => Promise<void>) => {
@@ -231,6 +323,9 @@ export const useStore = create<State>((set, get) => {
   const disconnected = (reason: string) => {
     toast.dismiss();
     stopLinkPolling();
+    clearTimeout(pairingTimer);
+    clearTimeout(scanTimer);
+    freeLock();
     queuedRefresh.clear();
     const { dongle } = get();
     if (dongle) void dongle.close(reason);
@@ -246,7 +341,7 @@ export const useStore = create<State>((set, get) => {
       }
     });
     navigator.hid.addEventListener("connect", (event) => {
-      if (!get().dongle && Dongle.isControlCollection(event.device)) void get().reconnectPermitted();
+      if (!get().dongle && !refusedByOtherTab && Dongle.isControlCollection(event.device)) void get().reconnectPermitted();
     });
   }
 
@@ -254,9 +349,12 @@ export const useStore = create<State>((set, get) => {
     dongle: null, phase: "disconnected", busy: null, busyDetail: null, inFlight: {}, deviceBusy: {}, headsetReady: false,
     info: null, profile: null, headset: null, settings: null, devices: [], lastError: null, pairingRequested: false, scanning: false, found: [], rowState: {},
     log: [], dropped: 0, showRaw: false,
-    diagnosticsOpen: typeof localStorage !== "undefined" && localStorage.getItem(DIAGNOSTICS_KEY) === "1",
+    diagnosticsOpen: readLocal(DIAGNOSTICS_KEY) === "1",
 
     async connect() {
+      if (framed) return;  // the page shows why instead (see App)
+      if (reopening) await reopening;  // an automatic reopen in flight may already adopt the dongle
+      if (get().dongle) return;
       let dongle: Dongle;
       try {
         dongle = await Dongle.pick();
@@ -268,22 +366,58 @@ export const useStore = create<State>((set, get) => {
         }
         return;
       }
+      removeSession(MANUAL_KEY);
+      manualDisconnect = false;
+      refusedByOtherTab = false;
+      if (!(await acquireLock())) { void dongle.close("In use in another tab"); lockRefused(); return; }
+      // Adopted meanwhile (e.g. by a replug reopen): never close the device that is in use.
+      const current = get().dongle;
+      if (current) { if (current.device !== dongle.device) void dongle.close("Already connected"); return; }
       await adopt(dongle);
     },
 
-    async reconnectPermitted() {
-      if (get().dongle) return;
-      try {
-        const dongle = await Dongle.reopenPermitted();
-        if (dongle) await adopt(dongle);
-      } catch (error) {
-        append(`Reopen: ${error instanceof Error ? error.message : String(error)}`, "error");
-      }
+    reconnectPermitted() {
+      if (reopening) return reopening;
+      reopening = (async () => {
+        // Not after a manual disconnect or a lock refusal in this tab, and never inside another site's frame.
+        if (get().dongle || manualDisconnect || readSession(MANUAL_KEY) || refusedByOtherTab || framed) return;
+        if (!(await acquireLock())) { lockRefused(); return; }
+        try {
+          const dongle = await Dongle.reopenPermitted();
+          const current = get().dongle;
+          if (dongle && !current) await adopt(dongle);
+          else {
+            if (dongle && dongle.device !== current?.device) void dongle.close("Already connected");
+            if (!current) freeLock();
+          }
+        } catch (error) {
+          append(`Reopen: ${error instanceof Error ? error.message : String(error)}`, "error");
+          if (!get().dongle) freeLock();
+        }
+      })().finally(() => { reopening = null; });
+      return reopening;
     },
 
     async disconnect() {
+      writeSession(MANUAL_KEY, "1");
+      manualDisconnect = true;
+      await endOpenWindows();
       disconnected("Dongle closed");
       set({ lastError: null });
+    },
+
+    async forgetDongle() {
+      const device = get().dongle?.device;
+      if (!device) return;
+      writeSession(MANUAL_KEY, "1");
+      manualDisconnect = true;
+      await endOpenWindows();
+      // Torn down first, so the HID disconnect event that forget() may raise is not taken for an unplug.
+      disconnected("Dongle forgotten");
+      set({ lastError: null });
+      const forget = (device as HIDDevice & { forget?: () => Promise<void> }).forget;
+      if (typeof forget !== "function") { append("This browser cannot revoke device permission; remove it in the site settings instead.", "error"); return; }
+      try { await forget.call(device); } catch (error) { append(`Forget dongle: ${error instanceof Error ? error.message : String(error)}`, "error"); }
     },
 
     refresh: () => guarded("Refresh", refreshAll),
@@ -319,22 +453,25 @@ export const useStore = create<State>((set, get) => {
 
     pair: () => guarded("Enter pairing mode", async (dongle) => {
       await assertHeadsetIdle(dongle);
-      await startPairing(dongle);
+      // Marked first (like startScan) so a Disconnect while the command runs still sends stopPairing.
       set({ pairingRequested: true });
+      armPairingCap();
+      try { await startPairing(dongle); } catch (error) { set({ pairingRequested: false }); clearTimeout(pairingTimer); throw error; }
     }),
 
     stopPairing: () => guarded("Leave pairing mode", async (dongle) => {
       await stopPairing(dongle);
       set({ pairingRequested: false });
+      clearTimeout(pairingTimer);
     }),
 
-    toggleDevice: (device) => withDeviceBusy(device, device.connected ? `Disconnect ${device.name}` : `Connect ${device.name}`, async (dongle) => {
+    toggleDevice: (device) => withDeviceBusy(device, deviceLabel(device.connected ? "Disconnect" : "Connect", device), async (dongle) => {
       await assertHeadsetIdle(dongle);
       await (device.connected ? disconnectDevice : connectDevice)(dongle, device.address);
       await settleDevices(dongle, device, !device.connected);
     }),
 
-    switchDevice: (device, plan) => withDeviceBusy(device, `Connect ${device.name}`, async (dongle) => {
+    switchDevice: (device, plan) => withDeviceBusy(device, deviceLabel("Connect", device), async (dongle) => {
       await assertHeadsetIdle(dongle);
       const profile = get().profile;
       if (plan.enableMultipoint && profile) {
@@ -353,6 +490,7 @@ export const useStore = create<State>((set, get) => {
       const { info, profile } = get();
       if (!info || !profile) throw new Error("The headset's control channel is not open.");
       const channel = await readChannelStatus(dongle, profile.channelUuid);
+      await assertHeadsetIdle(dongle);  // the vendor app refuses connection changes during a call
       await unpairDongle(dongle, info.address, hex(channel.headsetAddress, ":"));
       set({ phase: "unlinked", headsetReady: false, profile: null, headset: null, settings: null, devices: [] });
       startLinkPolling();
@@ -360,32 +498,42 @@ export const useStore = create<State>((set, get) => {
     }),
 
     startScan: () => guarded("Search for headsets", async (dongle) => {
-      await startScan(dongle);
+      // Marked first: results can arrive before the command's answer and are ignored unless scanning.
       set({ scanning: true, found: [] });
+      try { await startScan(dongle); } catch (error) { set({ scanning: false }); throw error; }
+      armScanCap();
     }),
 
     stopScan: () => guarded("Stop searching", async (dongle) => {
       await stopScan(dongle);
       set({ scanning: false, found: [] });
+      clearTimeout(scanTimer);
     }),
 
     // The outcome arrives as notifications: PairResult (failure) or BluetoothLink (success, which
     // stops the scan and reads the headset like any other link).
-    pairHeadset: (headset) => guarded(`Pair ${headset.name}`, async (dongle) => {
+    pairHeadset: (headset) => guarded(deviceLabel("Pair", headset, "Unnamed headset"), async (dongle) => {
       await pairHeadset(dongle, headset.address);
       set({ busyDetail: "Waiting for the headset to accept" });
       for (let attempt = 0; attempt < 10 && get().scanning; attempt++) await sleep(1000);
     }),
 
-    forget: (device) => withDeviceBusy(device, `Forget ${device.name}`, async (dongle) => {
+    forget: (device) => withDeviceBusy(device, deviceLabel("Forget", device), async (dongle) => {
+      await assertHeadsetIdle(dongle);
       await forgetDevice(dongle, device.address);
       set({ devices: await readHeadsetDevices(dongle) });
-      toast.success(`Removed ${device.name}`);
+      toast.success(`Removed ${device.name || device.address}`);
     }),
 
     setShowRaw: (showRaw) => set({ showRaw }),
-    setDiagnosticsOpen: (diagnosticsOpen) => { localStorage.setItem(DIAGNOSTICS_KEY, diagnosticsOpen ? "1" : "0"); set({ diagnosticsOpen }); },
+    setDiagnosticsOpen: (diagnosticsOpen) => { writeLocal(DIAGNOSTICS_KEY, diagnosticsOpen ? "1" : "0"); set({ diagnosticsOpen }); },
     clearLog: () => set({ log: [], dropped: 0 }),
+    // Fed by window error handlers; capped so an error raised while logging cannot flood the log.
+    logError: (text) => {
+      if (runtimeErrors >= MAX_RUNTIME_ERRORS) return;
+      if (++runtimeErrors === MAX_RUNTIME_ERRORS) text += " (further errors not logged)";
+      append(text, "error");
+    },
     logText: () => get().log.map((l) => `${l.time}\t${l.level}\t${l.text}`).join("\n"),
   };
 });

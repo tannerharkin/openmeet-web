@@ -23,7 +23,7 @@ export function Hero() {
   const percent = headset?.batteryPercent ?? null;
   const low = percent !== null && percent <= 20;
   const charging = headset?.charging ?? false;
-  const connected = devices.filter((d) => d.connected).map((d) => (d.address === info?.address ? "this computer" : d.name));
+  const connected = devices.filter((d) => d.connected).map((d) => (d.address === info?.address ? "this computer" : d.name || "Unnamed device"));
   const valueText = percent === null ? "unknown" : `${percent} percent${low ? ", low" : ""}${charging ? ", charging" : ""}`;
   return (
     <Card>

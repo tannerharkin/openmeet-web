@@ -10,6 +10,7 @@ import { Diagnostics } from "@/components/diagnostics";
 import { Unsupported } from "@/components/unsupported";
 import { useTheme } from "@/hooks/use-theme";
 import { useStore } from "@/store";
+import { framed } from "@/lib/env";
 
 export default function App() {
   const theme = useTheme((s) => s.theme);
@@ -19,7 +20,9 @@ export default function App() {
     <TooltipProvider>
       <div className="mx-auto max-w-3xl p-4 sm:p-6">
         <Header />
-        {!supported ? (
+        {framed ? (
+          <Unsupported reason="framed" />
+        ) : !supported ? (
           <Unsupported />
         ) : (
           <main className="mt-6 space-y-4" aria-busy={!!busy}>
