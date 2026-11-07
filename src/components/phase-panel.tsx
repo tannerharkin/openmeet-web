@@ -20,7 +20,7 @@ function Notice({ icon, title, text, action, role = "status", tone = "" }: { ico
 
 // One panel for every state in which the headset cannot be controlled yet.
 export function PhasePanel() {
-  const { phase, busy, busyDetail, lastError, connect, retry, scanning, found, startScan, stopScan, pairHeadset, isInFlight } = useStore();
+  const { phase, busy, busyDetail, lastError, connect, retry, dismissError, scanning, found, startScan, stopScan, pairHeadset, isInFlight } = useStore();
 
   if (lastError && !busy) {
     return (
@@ -28,7 +28,7 @@ export function PhasePanel() {
               title={`${lastError.label} failed`} text={lastError.message}
               action={phase === "disconnected"
                 ? <Button onClick={() => void connect()}><Usb aria-hidden /> Connect dongle</Button>
-                : <Button variant="outline" onClick={() => void retry()}><RotateCw aria-hidden /> Retry</Button>} />
+                : <div className="flex gap-2"><Button variant="outline" onClick={() => void retry()}><RotateCw aria-hidden /> Retry</Button><Button variant="ghost" onClick={dismissError}>Dismiss</Button></div>} />
     );
   }
   if (phase === "disconnected") {

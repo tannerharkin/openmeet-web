@@ -32,10 +32,11 @@ export function Diagnostics() {
   const levels = FILTERS.find((f) => f.id === filter)!.levels;
   const lines = log.filter((l) => levels.includes(l.level));
 
+  // Also on open (the box remounts at the top), filter change and resize, while stuck to the bottom.
   useEffect(() => {
     const el = box.current;
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [lines.length]);
+  }, [lines.length, filter, diagnosticsOpen, expanded]);
 
   const copy = async () => { await navigator.clipboard.writeText(logText()); toast.success(`Copied ${log.length} log lines`); };
   const download = () => {
@@ -84,7 +85,7 @@ export function Diagnostics() {
           <ol>
             {lines.map((line) => (
               <li key={line.id} className={`${CLASS[line.level]} ${line.level === "action" && !line.text.startsWith(">") ? "pl-4" : ""} whitespace-pre-wrap break-all`}>
-                <span className="text-muted-foreground">{line.time}  </span>{PREFIX[line.level] ?? ""}{line.text}
+                <span className="text-muted-foreground">{new Date(line.ts).toLocaleTimeString(undefined, { hour12: false })}  </span>{PREFIX[line.level] ?? ""}{line.text}
               </li>
             ))}
           </ol>
