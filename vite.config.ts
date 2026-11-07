@@ -4,11 +4,14 @@ import tailwindcss from "@tailwindcss/vite";
 import { viteSingleFile } from "vite-plugin-singlefile";
 import externalGlobals from "rollup-plugin-external-globals";
 import path from "node:path";
+import { cspMeta } from "./build/csp";
 
-// React and ReactDOM come from cdnjs (see index.html); everything else is bundled and inlined into
-// a single HTML file so the result can be published as one gist file.
+// React and ReactDOM load from cdnjs (see index.html) to keep the single file small and let browsers cache
+// them; everything else is bundled and inlined into one HTML file. cspMeta must follow viteSingleFile so it
+// hashes the final inlined scripts. removeViteModuleLoader drops the modulepreload polyfill (no-op here, and it
+// would need its own CSP hash).
 export default defineConfig({
-  plugins: [react(), tailwindcss(), viteSingleFile()],
+  plugins: [react(), tailwindcss(), viteSingleFile({ removeViteModuleLoader: true }), cspMeta()],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),

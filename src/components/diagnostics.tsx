@@ -76,6 +76,7 @@ export function Diagnostics() {
             </Tooltip>
           ))}
         </div>
+        <p className="text-xs text-muted-foreground">Copies and downloads include device names and Bluetooth addresses.</p>
 
         <div ref={box} tabIndex={0} aria-label="Activity log" onScroll={() => { const el = box.current!; stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8; }}
              className={`overflow-auto rounded-md bg-muted/50 p-3 font-mono text-xs leading-5 ${expanded ? "max-h-[70vh]" : "max-h-64"}`}>

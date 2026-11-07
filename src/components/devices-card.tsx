@@ -6,7 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SettingGroup, SettingRow } from "@/components/setting-row";
-import { useStore } from "@/store";
+import { deviceLabel, useStore } from "@/store";
 import type { PairedDevice } from "@/protocol/commands";
 
 export function DevicesCard() {
@@ -14,6 +14,14 @@ export function DevicesCard() {
   const [toForget, setToForget] = useState<PairedDevice | null>(null);
   const [toSwitch, setToSwitch] = useState<PairedDevice | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  // Radix keeps a closing dialog mounted for its exit animation; keep showing the last device so the text
+  // does not flash "Unnamed device (undefined)" while it fades out.
+  const lastForget = useRef<PairedDevice | null>(null);
+  const lastSwitch = useRef<PairedDevice | null>(null);
+  if (toForget) lastForget.current = toForget;
+  if (toSwitch) lastSwitch.current = toSwitch;
+  const shownForget = toForget ?? lastForget.current;
+  const shownSwitch = toSwitch ?? lastSwitch.current;
   const disabled = !headsetReady;
   const pairingBusy = isInFlight("Enter pairing mode") || isInFlight("Leave pairing mode");
   const connectedCount = devices.filter((d) => d.connected).length;
@@ -66,12 +74,12 @@ export function DevicesCard() {
               </span>
               <span className="flex items-center gap-1">
                 <Button variant="outline" size="sm" className="w-24" disabled={isDongle(d)} aria-disabled={disabled || !!deviceBusy[d.address]}
-                        onClick={() => { if (disabled || deviceBusy[d.address]) return; if (d.connected) void toggleDevice(d); else requestConnect(d); }} aria-label={`${d.connected ? "Disconnect" : "Connect"} ${d.name}`}>
+                        onClick={() => { if (disabled || deviceBusy[d.address]) return; if (d.connected) void toggleDevice(d); else requestConnect(d); }} aria-label={deviceLabel(d.connected ? "Disconnect" : "Connect", d)}>
                   {deviceBusy[d.address] ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : d.connected ? "Disconnect" : "Connect"}
                 </Button>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon-sm" aria-disabled={disabled || !!deviceBusy[d.address] || isInFlight("Unpair this computer")} aria-label={`Forget ${d.name}`} onClick={() => { if (!disabled && !deviceBusy[d.address]) setToForget(d); }}>
+                    <Button variant="ghost" size="icon-sm" aria-disabled={disabled || !!deviceBusy[d.address] || isInFlight("Unpair this computer")} aria-label={deviceLabel("Forget", d)} onClick={() => { if (!disabled && !deviceBusy[d.address] && !isInFlight("Unpair this computer")) setToForget(d); }}>
                       <Trash2 aria-hidden />
                     </Button>
                   </TooltipTrigger>
@@ -97,17 +105,17 @@ export function DevicesCard() {
       <Dialog open={toSwitch !== null} onOpenChange={(open) => { if (!open) { setToSwitch(null); heading.current?.focus(); } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Connect {toSwitch?.name}?</DialogTitle>
+            <DialogTitle>Connect {shownSwitch?.name || "Unnamed device"}?</DialogTitle>
             <DialogDescription>
               {plan.release
-                ? `The headset's ${slots === 1 ? "connection is" : "two connections are"} in use. ${plan.release.name} will be disconnected first.`
+                ? `The headset's ${slots === 1 ? "connection is" : "two connections are"} in use. ${plan.release.name || "Unnamed device"} (${plan.release.address}) will be disconnected first, then ${shownSwitch?.name || "Unnamed device"} (${shownSwitch?.address}) connects.`
                 : "With multipoint off the headset holds one connection, and this computer has it. Multipoint will be turned on so both can connect."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" autoFocus onClick={() => setToSwitch(null)}>Cancel</Button>
             <Button onClick={() => { if (toSwitch) void switchDevice(toSwitch, plan); setToSwitch(null); }}>
-              {plan.release ? `Disconnect ${plan.release.name} and connect` : "Turn on multipoint and connect"}
+              {plan.release ? `Disconnect ${plan.release.name || "Unnamed device"} (${plan.release.address}) and connect` : "Turn on multipoint and connect"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -115,7 +123,7 @@ export function DevicesCard() {
 
       <Dialog open={toForget !== null} onOpenChange={(open) => { if (!open) { setToForget(null); heading.current?.focus(); } }}>
         <DialogContent>
-          {toForget && isDongle(toForget) ? (
+          {shownForget && isDongle(shownForget) ? (
             <>
               <DialogHeader>
                 <DialogTitle>Unpair this computer?</DialogTitle>
@@ -131,8 +139,8 @@ export function DevicesCard() {
           ) : (
             <>
               <DialogHeader>
-                <DialogTitle>Forget {toForget?.name}?</DialogTitle>
-                <DialogDescription>Removes {toForget?.address} from the headset's pairing list{toForget?.connected ? " and disconnects it" : ""}.</DialogDescription>
+                <DialogTitle>Forget {shownForget?.name || "Unnamed device"}?</DialogTitle>
+                <DialogDescription>Removes {shownForget?.address} from the headset's pairing list{shownForget?.connected ? " and disconnects it" : ""}.</DialogDescription>
               </DialogHeader>
               <DialogFooter>
                 <Button variant="outline" autoFocus onClick={() => setToForget(null)}>Cancel</Button>

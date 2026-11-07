@@ -1,7 +1,7 @@
 import { AlertTriangle, BluetoothSearching, Headphones, Link2, Loader2, PlugZap, Power, RotateCw, Usb, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { useStore } from "@/store";
+import { deviceLabel, useStore } from "@/store";
 
 function Notice({ icon, title, text, action, role = "status", tone = "" }: { icon: React.ReactNode; title: string; text?: React.ReactNode; action?: React.ReactNode; role?: "status" | "alert"; tone?: string }) {
   return (
@@ -49,20 +49,25 @@ export function PhasePanel() {
             </div>
             <Button variant="outline" onClick={() => void stopScan()}><X aria-hidden /> Stop</Button>
           </div>
+          {/* Names come from whatever answered the scan; anyone nearby can advertise "OpenMeet". */}
+          {found.length > 0 ? <p className="text-xs text-muted-foreground">Names are reported by the nearby device; check the address before pairing.</p> : null}
+          {found.length > 1 || found.some((h) => !h.name.includes("OpenMeet"))
+            ? <p className="text-xs text-amber-600 dark:text-amber-400" role="note">More than one device answered, or a name is not an OpenMeet. Pair only the one whose address matches your headset.</p>
+            : null}
           <ul className="divide-y divide-border/60">
             {found.length === 0 ? <li className="py-3 text-sm text-muted-foreground">Nothing found yet.</li> : null}
-            {found.map((h) => (
+            {found.map((h) => { const label = deviceLabel("Pair", h, "Unnamed headset"); return (
               <li key={h.address} className="flex min-h-13 items-center gap-4 py-2">
                 <Headphones className="size-4 shrink-0 text-muted-foreground" aria-hidden />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm leading-5 font-medium">{h.name || "Unnamed headset"}</div>
                   <div className="font-mono text-xs leading-4 text-muted-foreground">{h.address}</div>
                 </div>
-                <Button size="sm" className="w-20" aria-disabled={isInFlight(`Pair ${h.name}`)} onClick={() => { if (!isInFlight(`Pair ${h.name}`)) void pairHeadset(h); }} aria-label={`Pair ${h.name}`}>
-                  {isInFlight(`Pair ${h.name}`) ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <><Link2 aria-hidden /> Pair</>}
+                <Button size="sm" className="w-20" aria-disabled={isInFlight(label)} onClick={() => { if (!isInFlight(label)) void pairHeadset(h); }} aria-label={label}>
+                  {isInFlight(label) ? <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden /> : <><Link2 aria-hidden /> Pair</>}
                 </Button>
               </li>
-            ))}
+            ); })}
           </ul>
         </CardContent>
       </Card>

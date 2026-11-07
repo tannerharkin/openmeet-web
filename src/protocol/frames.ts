@@ -13,18 +13,22 @@ export const PRODUCT_ID = 0x2f06;            // Loop120
 // Per-model differences. The OpenMeet (C610) is what this project was captured from; the OpenMeet 2
 // (C62x, "IWE" in the vendor app) uses the same frames except for the SPP channel UUID and the
 // mute-reminder tags, so it is offered as experimental: nothing here has been verified on one.
+// The mute-reminder tags are per model; they are part of the tag2 allowlist below.
+export type MuteReminderGetTag = 21 | 113;
+export type MuteReminderSetTag = 25 | 81;
 export interface HeadsetProfile {
   model: string;             // display name
   channelUuid: number;       // SPP channel the dongle tunnels headset commands through
-  muteReminderGet: number;   // tag2 of the GET, and which reply byte holds the on/off flag
+  muteReminderGet: MuteReminderGetTag;  // tag2 of the GET, and which reply byte holds the on/off flag
   muteReminderFlagIndex: number;
-  muteReminderSet: number;   // tag2 of the SET
+  muteReminderSet: MuteReminderSetTag;  // tag2 of the SET
   experimental: boolean;
 }
 const OPENMEET: HeadsetProfile = { model: "OpenMeet", channelUuid: 0xfef0, muteReminderGet: 21, muteReminderFlagIndex: 0, muteReminderSet: 25, experimental: false };
 const OPENMEET2: HeadsetProfile = { model: "OpenMeet 2", channelUuid: 0xfc4a, muteReminderGet: 113, muteReminderFlagIndex: 1, muteReminderSet: 81, experimental: true };
 
-// The dongle reports a 4-character model code; the vendor app matches "C610" exactly and "C62" as a prefix.
+// The dongle reports a 4-character model code; like the vendor app (Connector.cs), "C610" must match exactly
+// and "C62" anywhere in the code (substring, `model.Contains("C62")`).
 export function profileForModel(code: string): HeadsetProfile | null {
   if (code === "C610") return OPENMEET;
   if (code.includes("C62")) return OPENMEET2;
@@ -42,7 +46,8 @@ export const ROUTE: Record<`${Target}.${Kind}`, { reportId: number; tag1: number
 export const DONGLE_SYNC_TAG1 = 0x12;   // unsolicited dongle notifications
 export const HEADSET_SYNC_TAG1 = 0x03;  // unsolicited headset notifications
 
-// Command numbers (tag2). Firmware-update, reset and factory commands are intentionally left out.
+// Command numbers (tag2). Firmware-update, reset and factory commands are intentionally left out, and
+// the *Tag types below make Dongle's public methods accept only these numbers, so tsc enforces it.
 export const DONGLE_GET = { address: 1, headsetLinked: 9, version: 10, headsetModel: 12, pairedList: 6, channelStatus: 7 } as const;
 export const DONGLE_SET = { startScan: 1, stopScan: 2, connectChannel: 5, pair: 13, deletePaired: 14 } as const;
 export const HEADSET_GET = {
@@ -55,6 +60,10 @@ export const HEADSET_SET = {
   promptVolume: 21, buttonSound: 22, focusMode: 23, busylight: 24,  // mute reminder: see HeadsetProfile
   pcAudioPriority: 26, autoOff: 27, prompt: 28, startPairing: 29, previewPrompt: 30, stopPairing: 35,
 } as const;
+export type DongleGetTag = (typeof DONGLE_GET)[keyof typeof DONGLE_GET];
+export type DongleSetTag = (typeof DONGLE_SET)[keyof typeof DONGLE_SET];
+export type HeadsetGetTag = (typeof HEADSET_GET)[keyof typeof HEADSET_GET] | MuteReminderGetTag;
+export type HeadsetSetTag = (typeof HEADSET_SET)[keyof typeof HEADSET_SET] | MuteReminderSetTag;
 
 export const DONGLE_NOTIFICATION: Record<number, string> = { 1: "BluetoothLink", 2: "ControlChannel", 3: "ScanResult", 4: "PairResult" };
 export const HEADSET_NOTIFICATION: Record<number, string> = { 2: "Charging", 3: "Battery", 9: "Eq", 11: "DeviceConnection" };
@@ -98,8 +107,16 @@ export const le16 = (b: Bytes, o = 0) => b[o] | (b[o + 1] << 8);
 export const le32 = (b: Bytes, o = 0) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
 export const hex = (bytes: Bytes, sep = " ") => Array.from(bytes, (b) => b.toString(16).padStart(2, "0").toUpperCase()).join(sep);
 export const macString = (bytes: Bytes) => hex(bytes, ":");
-export const macBytes = (text: string) => text.split(":").map((h) => parseInt(h, 16));
+const MAC_PATTERN = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i;
+export function macBytes(text: string): number[] {
+  if (!MAC_PATTERN.test(text)) throw new Error(`Not a Bluetooth address: '${text}'`);
+  return text.split(":").map((h) => parseInt(h, 16));
+}
 export const paddedText = (bytes: Uint8Array, offset = 0) => new TextDecoder().decode(bytes.subarray(offset)).replace(/\0+$/, "");
+// Device-supplied display text: control characters and bidi overrides could fake or reorder UI text,
+// so they go; other format characters stay (ZWJ U+200D joins emoji). Clamped to 64 code points.
+const UNSAFE_TEXT = /[\p{Cc}\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu;
+export const deviceText = (bytes: Uint8Array, offset = 0) => Array.from(paddedText(bytes, offset).replace(UNSAFE_TEXT, "")).slice(0, 64).join("");
 export const flagValue = (on: boolean) => u32(on ? 1 : 0);
 export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -132,8 +149,12 @@ export function parseReport(bytes: Uint8Array, warn: (message: string) => void =
     const payloadLength = le16(bytes, offset + 8);
     const crc = le16(bytes, offset + 10);
     const start = offset + 12;
-    offset += 8 + frameLength;
+    offset += 8 + frameLength;  // always advances by at least 8, so the loop terminates
 
+    if (frameLength !== payloadLength + 4) {
+      warn(`Dropping frame with inconsistent lengths (frame length=${frameLength}, payload length=${payloadLength})`);
+      continue;
+    }
     if (packets !== 1 || start + payloadLength > bytes.length) {
       warn(`Dropping unsupported frame (packets=${packets}, payload length=${payloadLength})`);
       continue;
@@ -153,12 +174,14 @@ export function parseReport(bytes: Uint8Array, warn: (message: string) => void =
     }
     const tag1 = fields.get(2);
     const tag2 = fields.get(3);
-    if (!tag1 || !tag2) {
-      warn(`Dropping frame without tag fields: ${hex(payload)}`);
+    if (!tag1 || !tag2 || tag1.length < 4 || tag2.length < 4) {
+      warn(`Dropping frame without valid tag fields: ${hex(payload)}`);
       continue;
     }
     frames.push({ tag1: le32(tag1), tag2: le32(tag2), value: fields.get(4) ?? new Uint8Array(0) });
   }
+  // Reports are zero padded; anything else left over is a frame that was not recognised.
+  if (offset < bytes.length && bytes.subarray(offset).some((b) => b !== 0)) warn(`Ignoring ${bytes.length - offset} unparsed bytes at offset ${offset}`);
   return frames;
 }
 
@@ -176,15 +199,15 @@ export function describeNotification(frame: Frame): string {
   const v = frame.value;
   const name = notificationName(frame);
   const mac = () => (v.length >= 6 ? macString(v.subarray(0, 6)) : "?");
-  const text = (offset: number) => (v.length > offset ? paddedText(v.subarray(offset + 1, offset + 1 + v[offset])) : "");
+  const text = (offset: number) => (v.length > offset ? deviceText(v.subarray(offset + 1, offset + 1 + v[offset])) : "");
   switch (name) {
     case "Dongle.BluetoothLink": return `Headset ${mac()} ${v[6] === 1 ? "linked" : "link lost"}`;
     case "Dongle.ControlChannel": return `Control channel to ${mac()} ${v[8] === 1 ? "open" : "closed"}`;
     case "Dongle.ScanResult": return `Found ${text(6)} (${mac()})`;
     case "Dongle.PairResult": return `Pairing with ${mac()} ${v[6] === 1 ? "failed" : "succeeded"}`;
-    case "Headset.Battery": return `Battery ${(v[0] + 1) * 10} %`;
+    case "Headset.Battery": return `Battery ${v.length === 0 ? "?" : (v[0] + 1) * 10} %`;
     case "Headset.Charging": return v[0] === 0 ? "Charger connected" : "Running on battery";
-    case "Headset.Eq": return `Equalizer changed to ${EQ_NAME[v[0]] ?? `code ${v[0]}`}`;
+    case "Headset.Eq": return `Equalizer changed to ${v.length === 0 ? "?" : EQ_NAME[v[0]] ?? `code ${v[0]}`}`;
     case "Headset.DeviceConnection": return `${text(7) || mac()} ${v[6] === 1 ? "connected" : "disconnected"}`;
     default: return `${name}: ${hex(v)}`;
   }

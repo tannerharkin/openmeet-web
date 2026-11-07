@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0a" />
@@ -15,7 +16,7 @@
     <meta property="og:locale" content="en_US" />
     <meta property="og:url" content="https://openmeet.tannerharkin.com/" />
     <meta property="og:title" content="OpenMeet Web" />
-    <meta property="og:description" content="Control your Shokz OpenMeet headset from the browser. No app to install, nothing for IT to approve. Works in Chrome and Edge." />
+    <meta property="og:description" content="Control your Shokz OpenMeet headset from the browser. No app to install. Works in Chrome and Edge." />
     <meta property="og:image" content="https://openmeet.tannerharkin.com/og.png" />
     <meta property="og:image:secure_url" content="https://openmeet.tannerharkin.com/og.png" />
     <meta property="og:image:type" content="image/png" />
@@ -24,16 +25,21 @@
     <meta property="og:image:alt" content="OpenMeet Web: control your Shokz OpenMeet headset from the browser" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="OpenMeet Web" />
-    <meta name="twitter:description" content="Control your Shokz OpenMeet headset from the browser. No app to install, nothing for IT to approve. Works in Chrome and Edge." />
+    <meta name="twitter:description" content="Control your Shokz OpenMeet headset from the browser. No app to install. Works in Chrome and Edge." />
     <meta name="twitter:image" content="https://openmeet.tannerharkin.com/og.png" />
     <meta name="twitter:image:alt" content="OpenMeet Web: control your Shokz OpenMeet headset from the browser" />
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="application-title" content="" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" integrity="sha512-QVs8Lo43F9lSuBykadDb0oSXDL/BbZ588urWVCRwSIoewQv/Ewg1f84mK3U790bZ0FfhFa1YSQUmIhG+pIRKeg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" integrity="sha512-6a1107rTlA4gYpgHAqbwLAtxmWipBdJFcq8y5S/aTge3Bp+VAklABm2LO+Kg51vOWR9JMZq1Ovjl5tpluNpTeQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script>
+      // If cdnjs is blocked or down, explain instead of leaving a blank page (#root isn't parsed yet).
+      if (!window.React || !window.ReactDOM) document.addEventListener("DOMContentLoaded", function () {
+        document.getElementById("root").textContent = "OpenMeet Web could not load React from cdnjs.cloudflare.com. Check your connection, or whether an ad/content blocker or network filter is blocking that site, then reload.";
+      });
+    </script>
   </head>
   <body>
     <div id="root">

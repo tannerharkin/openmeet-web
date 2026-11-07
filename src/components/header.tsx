@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { Headphones, Loader2, Moon, RefreshCw, Sun, Unplug, Usb } from "lucide-react";
+import { Headphones, Loader2, Moon, RefreshCw, Sun, Trash2, Unplug, Usb } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useStore } from "@/store";
 import { useTheme } from "@/hooks/use-theme";
+import { framed } from "@/lib/env";
 
 const PHASE_LABEL = { disconnected: "Not connected", unlinked: "Headset not linked", connected: "Connected" } as const;
 
@@ -31,10 +33,13 @@ function useLongRunning(busy: string | null, delayMs = 700) {
 }
 
 export function Header() {
-  const { phase, busy, connect, refresh, disconnect, isInFlight } = useStore();
+  const { phase, busy, connect, refresh, disconnect, forgetDongle, isInFlight } = useStore();
   const { theme, toggle } = useTheme();
   const longRunning = useLongRunning(busy);
   const refreshing = isInFlight("Refresh");
+  const [confirmForget, setConfirmForget] = useState(false);
+  // An unplug while the dialog is open would leave a confirm that does nothing; close it instead.
+  useEffect(() => { if (phase === "disconnected") setConfirmForget(false); }, [phase]);
   return (
     <header className="flex flex-wrap items-center gap-3">
       <Headphones className="size-7" aria-hidden />
@@ -45,16 +50,31 @@ export function Header() {
         {longRunning ? <Loader2 className="size-3 animate-spin motion-reduce:animate-none" aria-label="working" /> : null}
       </Badge>
       <div className="ml-auto flex items-center gap-1">
-        {phase === "disconnected" ? (
+        {framed ? null : phase === "disconnected" ? (
           <Button onClick={() => void connect()} aria-describedby="connect-hint"><Usb aria-hidden /> Connect dongle</Button>
         ) : (
           <>
             <IconAction label="Refresh" disabled={refreshing} onClick={() => void refresh()}><RefreshCw className={refreshing ? "animate-spin motion-reduce:animate-none" : ""} aria-hidden /></IconAction>
             <IconAction label="Disconnect dongle" onClick={() => void disconnect()}><Unplug aria-hidden /></IconAction>
+            <IconAction label="Forget this dongle" onClick={() => setConfirmForget(true)}><Trash2 aria-hidden /></IconAction>
           </>
         )}
         <IconAction label={theme === "dark" ? "Light theme" : "Dark theme"} onClick={toggle}>{theme === "dark" ? <Sun aria-hidden /> : <Moon aria-hidden />}</IconAction>
       </div>
+      <Dialog open={confirmForget && phase !== "disconnected"} onOpenChange={setConfirmForget}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Forget this dongle?</DialogTitle>
+            <DialogDescription>
+              The page disconnects and gives up its permission to use the Loop120. The browser will ask for permission again the next time you connect. The headset's pairing is not changed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" autoFocus onClick={() => setConfirmForget(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => { setConfirmForget(false); void forgetDongle(); }}>Forget</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </header>
   );
 }

@@ -1,19 +1,20 @@
 // Scripted Loop120 + OpenMeet for driving the UI without hardware. Injected as a page init script by
-// the test harness; replies use values captured from a real session. Not part of the build.
+// the test harness; reply shapes are captured from a real session, identifiers are synthetic (RFC 7042
+// documentation MACs). Not part of the build.
 (() => {
   const u32 = n => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
   const crc16 = b => { let c = 0; for (const x of b) { c ^= x; for (let i = 0; i < 8; i++) c = c & 1 ? (c >>> 1) ^ 0xA001 : c >>> 1; } return c ^ 0xFFFF; };
   const tlv = (t, v) => [...u32(t), ...u32(v.length), ...v];
   const frame = (t1, t2, v) => { const p = tlv(1, [...tlv(2, u32(t1)), ...tlv(3, u32(t2)), ...tlv(4, v)]); const c = crc16(p); return [0xA5, 0x5A, (p.length + 4) & 255, 0, 1, 1, 0, 0, p.length & 255, 0, c & 255, c >> 8, ...p]; };
   const ascii = (s, n) => { const b = Array.from(new TextEncoder().encode(s)); while (b.length < n) b.push(0); return b; };
-  const mac = [0xA8, 0xF5, 0xE1, 0x9E, 0x58, 0x84];
+  const mac = [0x00, 0x00, 0x5E, 0x00, 0x53, 0x01];
   const state = window.__state = { model: "C610", eq: 1, prompt: [0, 0, 1, 0], vol: 0, btn: 1, busy: 1, focus: 0, mute: 0, pc: 1, autoOff: 480, mp: 1, channel: 0, linked: 1, inCall: 0, uuids: [], devices: [
-    { mac: [0x28,0x34,0xFF,0x59,0x70,0xF8], name: "Tom\u2019s iPhone", connected: 1 }, { mac: [0xA8,0xF5,0xE1,0xFC,0xCE,0x50], name: "Loop120 by Shokz", connected: 1 }, { mac: [1,2,3,4,5,6], name: "ThinkPad", connected: 0 } ] };
+    { mac: [0x00,0x00,0x5E,0x00,0x53,0x03], name: "Example iPhone", connected: 1 }, { mac: [0x00,0x00,0x5E,0x00,0x53,0x02], name: "Loop120 by Shokz", connected: 1 }, { mac: [1,2,3,4,5,6], name: "ThinkPad", connected: 0 } ] };
   const list = () => [0, state.devices.length, ...state.devices.flatMap((d, i) => [i, ...d.mac, d.connected, 31, ...ascii(d.name, 31)])];
   const findDevice = v => state.devices.find(x => x.mac.every((b, i) => b === v[i]));
   let fake;
   const replies = {
-    "17:10": () => ascii("D120_DU_V_09_20260722", 32), "17:1": () => [0xA8, 0xF5, 0xE1, 0xFC, 0xCE, 0x50, 0, 0], "17:9": () => u32(state.linked), "17:12": () => ascii(state.model, 4),
+    "17:10": () => ascii("D120_DU_V_09_20260722", 32), "17:1": () => [0x00, 0x00, 0x5E, 0x00, 0x53, 0x02, 0, 0], "17:9": () => u32(state.linked), "17:12": () => ascii(state.model, 4),
     "17:7": v => { state.uuids.push("get:" + (v[0] | (v[1] << 8)).toString(16)); return [1, 0, state.channel, ...mac, ...new Array(59).fill(0)]; },
     "16:1": () => { state.scanning = true; state.scanTimer = setInterval(() => { if (state.scanning) fake.notify(0x12, 3, [...mac, 17, ...ascii("OpenMeet by Shokz", 17)]); }, 700); return [0, 0, 0, 0]; },
     "16:2": () => { state.scanning = false; clearInterval(state.scanTimer); return [0, 0, 0, 0]; },
