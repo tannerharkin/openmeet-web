@@ -22,7 +22,7 @@ In scope:
 Out of scope (please report upstream):
 
 - Shokz firmware or hardware (OpenMeet headset, Loop120 dongle) and the Shokz Connect app: see the Shokz disclosure page, https://uk.shokz.com/pages/safety-updates-and-announcements
-- Issues in GitHub, GitHub Pages, cdnjs, or Chrome/Edge and WebHID themselves
+- Issues in GitHub, GitHub Pages, or Chrome/Edge and WebHID themselves
 
 ## Expectations
 
@@ -30,4 +30,4 @@ This is a best-effort hobby project. Reports are read and fixed as time allows; 
 
 ## Security model
 
-There is no backend, account or telemetry. The only external origin the page loads from is cdnjs (React and ReactDOM, pinned with Subresource Integrity). The page only sends the command set defined in `src/protocol/frames.ts` to the dongle. However, once you grant the page access to a dongle, the browser remembers that permission for the origin, so anyone who could control the origin's content could use the granted dongle. To revoke access, use the app's **Forget this dongle** button, or remove the device in Chrome/Edge site settings → HID devices (`chrome://settings/content/hidDevices`).
+There is no backend, account or telemetry. The page is one self-contained file (React included) and loads nothing from other origins. The page only sends the command set defined in `src/protocol/frames.ts` to the dongle. However, once you grant the page access to a dongle, the browser remembers that permission for the origin, so anyone who could control the origin's content could use the granted dongle. To revoke access, use the app's **Forget this dongle** button, or remove the device in Chrome/Edge site settings → HID devices (`chrome://settings/content/hidDevices`).

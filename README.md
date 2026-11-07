@@ -40,7 +40,7 @@ The dongle exposes a HID collection (usage page `0x0C`, usage `0x01`) that carri
 
 ## Security & privacy
 
-There is no backend, account or telemetry. The page loads from its own origin plus React from cdnjs (pinned with Subresource Integrity) and contacts nothing else.
+There is no backend, account or telemetry. The page is a single file served from its own origin (React included) and contacts nothing else; a saved copy works offline.
 
 It stores only UI preferences in `localStorage` (`shokz-theme`, `shokz-diagnostics-open`) and a `sessionStorage` flag remembering that you disconnected manually. Device data (Bluetooth addresses and names of paired devices) stays in the browser, except when you copy or download the diagnostics log, which contains them.
 
