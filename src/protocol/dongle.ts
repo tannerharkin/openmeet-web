@@ -9,10 +9,12 @@ export type NotificationListener = (frame: Frame) => void;
 // One WebHID device: requests run one at a time (like the official app) and replies are matched by
 // tag, so notifications that arrive in between are routed separately instead of being mistaken.
 export class Dongle {
-  // Reopens a dongle the user already granted in an earlier session (no picker needed).
-  static async reopenPermitted(): Promise<Dongle | null> {
-    const devices = await navigator.hid.getDevices();
-    const device = devices.find((candidate) => Dongle.isControlCollection(candidate));
+  // Reopens a dongle the user already granted in an earlier session (no picker needed). Prefers
+  // `device` (e.g. the one just plugged in) when it is a control collection.
+  static async reopenPermitted(device?: HIDDevice): Promise<Dongle | null> {
+    if (!device || !Dongle.isControlCollection(device)) {
+      device = (await navigator.hid.getDevices()).find((candidate) => Dongle.isControlCollection(candidate));
+    }
     if (!device) return null;
     if (!device.opened) await device.open();
     return new Dongle(device);

@@ -7,9 +7,9 @@ import {
 } from "./frames";
 
 export interface DongleInfo { product: string; firmware: string; address: string; headsetLinked: boolean; headsetModel: string }
-export interface HeadsetStatus { firmware: string; batteryPercent: number | null; charging: boolean; language: string }
+export interface HeadsetStatus { firmware: string; batteryPercent: number | null; charging: boolean | null; language: string }
 export interface Settings {
-  eq: string; prompt: Prompt; promptVolume: PromptVolume; buttonSound: boolean; busylight: boolean; focusMode: boolean;
+  eq: string; prompt: Prompt; promptVolume: PromptVolume | null; buttonSound: boolean; busylight: boolean; focusMode: boolean;
   muteReminder: boolean; pcAudioPriority: boolean; autoOffMinutes: number; multipoint: boolean;
 }
 export interface PairedDevice { name: string; address: string; connected: boolean }
@@ -42,6 +42,15 @@ export function parseFoundHeadset(value: Uint8Array): FoundHeadset {
   return { address: macString(value.subarray(0, 6)), name: deviceText(value.subarray(7, 7 + value[6])) };
 }
 
+// Thrown when the headset already forgot this computer but the dongle did not confirm deleting the
+// headset. Retrying the whole unpair cannot work (the channel is gone); use removePairedHeadset.
+export class UnpairIncompleteError extends Error {
+  constructor(readonly headsetAddress: string, cause: unknown) {
+    super(`The headset forgot this computer, but the dongle did not confirm removing the headset: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = "UnpairIncompleteError";
+  }
+}
+
 // Unpairs this dongle from the headset on both sides: the headset forgets the dongle, and the dongle
 // forgets the headset so it stops trying to reconnect. The control channel is gone afterwards.
 export async function unpairDongle(dongle: Dongle, dongleAddress: string, headsetAddress: string): Promise<void> {
@@ -50,6 +59,17 @@ export async function unpairDongle(dongle: Dongle, dongleAddress: string, headse
   const headsetMac = macBytes(headsetAddress);
   if (headsetMac.every((b) => b === 0)) throw new Error("The headset address is unknown (all zero); not unpairing.");
   await dongle.headsetSet(HEADSET_SET.forget, [...dongleMac, 0, 0]);
+  try {
+    await dongle.dongleSet(DONGLE_SET.deletePaired, [...headsetMac, 0, 0]);
+  } catch (e) {
+    throw new UnpairIncompleteError(headsetAddress, e);
+  }
+}
+
+// Dongle-side half of unpairDongle, for finishing an unpair whose headset side already went through.
+export async function removePairedHeadset(dongle: Dongle, headsetAddress: string): Promise<void> {
+  const headsetMac = macBytes(headsetAddress);
+  if (headsetMac.every((b) => b === 0)) throw new Error("The headset address is unknown (all zero); not unpairing.");
   await dongle.dongleSet(DONGLE_SET.deletePaired, [...headsetMac, 0, 0]);
 }
 
@@ -91,7 +111,7 @@ export async function assertHeadsetIdle(dongle: Dongle): Promise<void> {
 }
 
 // Battery reply: [0] status, [1] level 0..9 -> 10..100 %. Charging: "[2] or [3] set" means running
-// on battery, anything else means on the charger.
+// on battery, anything else means on the charger; a short reply means unknown.
 export async function readHeadsetStatus(dongle: Dongle): Promise<HeadsetStatus> {
   const version = await dongle.headsetGet(HEADSET_GET.version);
   const charging = await dongle.headsetGet(HEADSET_GET.charging);
@@ -99,8 +119,8 @@ export async function readHeadsetStatus(dongle: Dongle): Promise<HeadsetStatus> 
   const language = await dongle.headsetGet(HEADSET_GET.language);
   return {
     firmware: deviceText(version, 1),
-    batteryPercent: battery[0] === 0 ? (battery[1] + 1) * 10 : null,
-    charging: !(charging[2] === 1 || charging[3] === 1),
+    batteryPercent: battery.length >= 2 && battery[0] === 0 && battery[1] <= 9 ? (battery[1] + 1) * 10 : null,
+    charging: charging.length >= 4 ? !(charging[2] === 1 || charging[3] === 1) : null,
     language: LANGUAGE_NAME[language[1]] ?? `code ${language[1]}`,
   };
 }
@@ -123,13 +143,13 @@ export async function readSettings(dongle: Dongle, profile: HeadsetProfile): Pro
   return {
     eq: EQ_NAME[eq[1]] ?? `code ${eq[1]}`,
     prompt: prompt[0] === 1 ? "Off" : prompt[2] === 1 ? "Tone" : "Voice",
-    promptVolume: PROMPT_VOLUME_NAME[volume[0]] ?? "Medium",
+    promptVolume: PROMPT_VOLUME_NAME[volume[0]] ?? null,
     buttonSound: button[0] === 1,
     busylight: busylight[0] === 1,
     focusMode: focus[0] === 1,
     muteReminder: reminder[profile.muteReminderFlagIndex] === 1,
     pcAudioPriority: pcPriority[0] === 1,
-    autoOffMinutes: le32(autoOff) | 0,
+    autoOffMinutes: le32(autoOff),
     multipoint: multipoint[1] !== 0,
   };
 }
@@ -177,14 +197,20 @@ export function forgetDevice(dongle: Dongle, address: string) { return dongle.he
 //   index(1) address(6) connected(1) nameLength(1) name(nameLength bytes, UTF-8, zero padded)
 export function parseHeadsetDevices(list: Uint8Array): PairedDevice[] {
   const devices: PairedDevice[] = [];
+  const seen = new Set<string>();
   let offset = 2;
   for (let i = 0; i < list[1] && offset + 9 <= list.length; i++) {
     const nameLength = list[offset + 8];
-    devices.push({
-      name: deviceText(list.subarray(offset + 9, offset + 9 + nameLength)),
-      address: macString(list.subarray(offset + 1, offset + 7)),
-      connected: list[offset + 7] === 1,
-    });
+    if (offset + 9 + nameLength > list.length) break; // truncated entry: drop it rather than show a cut name
+    const address = macString(list.subarray(offset + 1, offset + 7));
+    if (!seen.has(address)) {
+      seen.add(address);
+      devices.push({
+        name: deviceText(list.subarray(offset + 9, offset + 9 + nameLength)),
+        address,
+        connected: list[offset + 7] === 1,
+      });
+    }
     offset += 9 + nameLength;
   }
   return devices;

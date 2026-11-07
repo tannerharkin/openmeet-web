@@ -101,6 +101,8 @@ describe("describeNotification / profileForModel", () => {
   it("shows ? for empty battery and eq values", () => {
     expect(describeNotification({ tag1: 0x03, tag2: 3, value: new Uint8Array(0) })).toBe("Battery ? %");
     expect(describeNotification({ tag1: 0x03, tag2: 9, value: new Uint8Array(0) })).toBe("Equalizer changed to ?");
+    expect(describeNotification({ tag1: 0x03, tag2: 3, value: Uint8Array.of(10) })).toBe("Battery ? %");
+    expect(describeNotification({ tag1: 0x03, tag2: 3, value: Uint8Array.of(9) })).toBe("Battery 100 %");
   });
   it("sanitizes scan result names", () => {
     const name = enc("a\u202Eb");

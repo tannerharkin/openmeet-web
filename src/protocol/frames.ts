@@ -48,7 +48,7 @@ export const HEADSET_SYNC_TAG1 = 0x03;  // unsolicited headset notifications
 
 // Command numbers (tag2). Firmware-update, reset and factory commands are intentionally left out, and
 // the *Tag types below make Dongle's public methods accept only these numbers, so tsc enforces it.
-export const DONGLE_GET = { address: 1, headsetLinked: 9, version: 10, headsetModel: 12, pairedList: 6, channelStatus: 7 } as const;
+export const DONGLE_GET = { address: 1, headsetLinked: 9, version: 10, headsetModel: 12, channelStatus: 7 } as const;
 export const DONGLE_SET = { startScan: 1, stopScan: 2, connectChannel: 5, pair: 13, deletePaired: 14 } as const;
 export const HEADSET_GET = {
   version: 2, battery: 3, pairedList: 4, language: 6, eq: 8, multipoint: 16, promptVolume: 17,
@@ -205,7 +205,7 @@ export function describeNotification(frame: Frame): string {
     case "Dongle.ControlChannel": return `Control channel to ${mac()} ${v[8] === 1 ? "open" : "closed"}`;
     case "Dongle.ScanResult": return `Found ${text(6)} (${mac()})`;
     case "Dongle.PairResult": return `Pairing with ${mac()} ${v[6] === 1 ? "failed" : "succeeded"}`;
-    case "Headset.Battery": return `Battery ${v.length === 0 ? "?" : (v[0] + 1) * 10} %`;
+    case "Headset.Battery": return `Battery ${v.length === 0 || v[0] > 9 ? "?" : (v[0] + 1) * 10} %`;
     case "Headset.Charging": return v[0] === 0 ? "Charger connected" : "Running on battery";
     case "Headset.Eq": return `Equalizer changed to ${v.length === 0 ? "?" : EQ_NAME[v[0]] ?? `code ${v[0]}`}`;
     case "Headset.DeviceConnection": return `${text(7) || mac()} ${v[6] === 1 ? "connected" : "disconnected"}`;

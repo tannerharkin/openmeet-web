@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { assertHeadsetIdle, parseHeadsetDevices, readChannelStatus, unpairDongle, writeSetting } from "./commands";
+import {
+  UnpairIncompleteError, assertHeadsetIdle, parseHeadsetDevices, readChannelStatus, readHeadsetStatus, readSettings, removePairedHeadset, unpairDongle, writeSetting,
+} from "./commands";
 import type { Dongle } from "./dongle";
 import type { HeadsetProfile } from "./frames";
 
@@ -11,14 +13,38 @@ const fakeDongle = (reply: number[]) => {
 };
 
 describe("parseHeadsetDevices", () => {
-  it("parses entries and survives a truncated last entry", () => {
+  it("parses entries, drops a truncated last entry and skips duplicate addresses", () => {
     const name = new TextEncoder().encode("Phone\u202E");
     const entry = [0, 1, 2, 3, 4, 5, 6, 1, name.length, ...name];
-    const list = Uint8Array.from([0, 3, ...entry, 1, 9, 9, 9, 9, 9, 9, 0, 20, 0x41]);
+    const other = [1, 9, 9, 9, 9, 9, 9, 0, 1, 0x41];
+    const list = Uint8Array.from([0, 4, ...entry, ...other, 2, 1, 2, 3, 4, 5, 6, 0, 1, 0x42, 3, 7, 7, 7, 7, 7, 7, 0, 20, 0x43]);
     expect(parseHeadsetDevices(list)).toEqual([
       { name: "Phone", address: "01:02:03:04:05:06", connected: true },
       { name: "A", address: "09:09:09:09:09:09", connected: false },
     ]);
+  });
+});
+
+// Answers each headset GET by tag; anything missing replies empty.
+const replyByTag = (replies: Record<number, number[]>) =>
+  ({ headsetGet: vi.fn(async (tag: number) => Uint8Array.from(replies[tag] ?? [])) }) as unknown as Dongle;
+
+describe("readHeadsetStatus", () => {
+  it.each([[[0, 9], 100], [[0, 0], 10], [[0, 10], null], [[0], null], [[1, 5], null], [[], null]])("battery %j -> %s", async (battery, percent) => {
+    expect((await readHeadsetStatus(replyByTag({ 3: battery }))).batteryPercent).toBe(percent);
+  });
+  it.each([[[0, 0, 0, 0], true], [[0, 0, 1, 0], false], [[0, 0, 0, 1], false], [[0, 0, 0], null], [[], null]])("charging %j -> %s", async (charging, value) => {
+    expect((await readHeadsetStatus(replyByTag({ 25: charging }))).charging).toBe(value);
+  });
+});
+
+describe("readSettings", () => {
+  const profile = { muteReminderGet: 21, muteReminderFlagIndex: 0 } as unknown as HeadsetProfile;
+  it.each([[[0], "Medium"], [[2], "Low"], [[7], null], [[], null]])("prompt volume %j -> %s", async (volume, name) => {
+    expect((await readSettings(replyByTag({ 17: volume }), profile)).promptVolume).toBe(name);
+  });
+  it("reads auto-off as unsigned", async () => {
+    expect((await readSettings(replyByTag({ 23: [0xff, 0xff, 0xff, 0xff] }), profile)).autoOffMinutes).toBe(0xffffffff);
   });
 });
 
@@ -47,15 +73,44 @@ describe("unpairDongle", () => {
       await expect(unpairDongle(dongle, dongleAddress, headsetAddress)).rejects.toThrow();
       expect(send).not.toHaveBeenCalled();
     });
-  it("sends both commands for valid addresses", async () => {
+  const recorder = (failDongleSet = false) => {
     const calls: [string, number, number[]][] = [];
-    const record = (method: string) => vi.fn(async (tag: number, value: number[] = []) => { calls.push([method, tag, [...value]]); return Uint8Array.of(0); });
+    const record = (method: string) => vi.fn(async (tag: number, value: number[] = []) => {
+      calls.push([method, tag, [...value]]);
+      if (failDongleSet && method === "dongleSet") throw new Error("No reply");
+      return Uint8Array.of(0);
+    });
     const dongle = { dongleGet: record("dongleGet"), dongleSet: record("dongleSet"), headsetGet: record("headsetGet"), headsetSet: record("headsetSet") } as unknown as Dongle;
+    return { dongle, calls };
+  };
+  it("sends both commands for valid addresses", async () => {
+    const { dongle, calls } = recorder();
     await unpairDongle(dongle, "01:02:03:04:05:06", "0A:0B:0C:0D:0E:0F");
     expect(calls).toEqual([
       ["headsetSet", 9, [1, 2, 3, 4, 5, 6, 0, 0]],
       ["dongleSet", 14, [10, 11, 12, 13, 14, 15, 0, 0]],
     ]);
+  });
+  it("reports a half-done unpair with the headset address", async () => {
+    const error = await unpairDongle(recorder(true).dongle, "01:02:03:04:05:06", "0A:0B:0C:0D:0E:0F").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnpairIncompleteError);
+    expect((error as UnpairIncompleteError).headsetAddress).toBe("0A:0B:0C:0D:0E:0F");
+    expect((error as Error).message).toBe("The headset forgot this computer, but the dongle did not confirm removing the headset: No reply");
+  });
+  it("does not wrap a failure of the headset side", async () => {
+    const { dongle, calls } = recorder();
+    vi.mocked(dongle.headsetSet).mockRejectedValueOnce(new Error("timeout"));
+    const error = await unpairDongle(dongle, "01:02:03:04:05:06", "0A:0B:0C:0D:0E:0F").catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(UnpairIncompleteError);
+    expect(calls).toEqual([]);
+  });
+  it("removePairedHeadset sends only the dongle-side delete", async () => {
+    const { dongle, calls } = recorder();
+    await removePairedHeadset(dongle, "0A:0B:0C:0D:0E:0F");
+    expect(calls).toEqual([["dongleSet", 14, [10, 11, 12, 13, 14, 15, 0, 0]]]);
+    await expect(removePairedHeadset(dongle, "00:00:00:00:00:00")).rejects.toThrow(/unknown/);
+    await expect(removePairedHeadset(dongle, "bad")).rejects.toThrow();
+    expect(calls).toHaveLength(1);
   });
 });
 
