@@ -14,6 +14,8 @@ export function DevicesCard() {
   const [toForget, setToForget] = useState<PairedDevice | null>(null);
   const [toSwitch, setToSwitch] = useState<PairedDevice | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  // Radix's own close focus goes to the dialog trigger, and these dialogs have none; send it to the heading.
+  const returnFocus = (event: Event) => { event.preventDefault(); heading.current?.focus(); };
   // Radix keeps a closing dialog mounted for its exit animation; keep showing the last device so the text
   // does not flash "Unnamed device (undefined)" while it fades out.
   const lastForget = useRef<PairedDevice | null>(null);
@@ -102,8 +104,8 @@ export function DevicesCard() {
         </SettingGroup>
       </CardContent>
 
-      <Dialog open={toSwitch !== null} onOpenChange={(open) => { if (!open) { setToSwitch(null); heading.current?.focus(); } }}>
-        <DialogContent>
+      <Dialog open={toSwitch !== null} onOpenChange={(open) => { if (!open) setToSwitch(null); }}>
+        <DialogContent onCloseAutoFocus={returnFocus}>
           <DialogHeader>
             <DialogTitle>Connect {shownSwitch?.name || "Unnamed device"}?</DialogTitle>
             <DialogDescription>
@@ -121,8 +123,8 @@ export function DevicesCard() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={toForget !== null} onOpenChange={(open) => { if (!open) { setToForget(null); heading.current?.focus(); } }}>
-        <DialogContent>
+      <Dialog open={toForget !== null} onOpenChange={(open) => { if (!open) setToForget(null); }}>
+        <DialogContent onCloseAutoFocus={returnFocus}>
           {shownForget && isDongle(shownForget) ? (
             <>
               <DialogHeader>

@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-  # Weekly on main as well: catches new advisories (npm audit) and CDN file drift (SRI) between changes.
+  # Weekly on main as well: catches new advisories (npm audit) between changes.
   schedule:
     - cron: "17 6 * * 1"
 
@@ -29,4 +29,3 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npm test
       - run: npm run build
-      - run: node build/verify-sri.mjs

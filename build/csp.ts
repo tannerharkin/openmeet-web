@@ -9,24 +9,21 @@ import { createHash } from "node:crypto";
 // <meta> (CSP3 §3.3); GitHub Pages cannot set response headers.
 // style-src stays 'unsafe-inline' with no hashes: react-remove-scroll/react-style-singleton and sonner inject
 // <style> elements at runtime, and any hash in style-src would disable 'unsafe-inline'.
-const SCRIPT_RE = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+// An end tag is "</script" followed by anything up to ">" (whitespace, junk attributes), as the HTML parser reads it.
+const SCRIPT_RE = /<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi;
 const attr = (attrs: string, name: string) => new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, "i").exec(attrs)?.[1];
 
 export function buildCsp(html: string): string {
   const sources: string[] = [];
   let module = false;
   for (const [, attrs, body] of html.matchAll(SCRIPT_RE)) {
+    // Everything is inlined; an external script would break the "nothing from other origins" promise.
     const src = attr(attrs, "src");
-    if (src) {
-      const integrity = attr(attrs, "integrity");
-      if (integrity) sources.push(...integrity.split(/\s+/).filter(Boolean).map((v) => `'${v}'`));
-      sources.push(src);
-    } else {
-      if (/\btype\s*=\s*"module"/i.test(attrs)) module = true;
-      // The HTML parser turns CRLF/CR into LF before CSP hashes the text, so hash what the browser sees.
-      const text = body.replace(/\r\n?/g, "\n");
-      sources.push(`'sha256-${createHash("sha256").update(text, "utf8").digest("base64")}'`);
-    }
+    if (src) throw new Error(`external script not allowed: ${src}`);
+    if (/\btype\s*=\s*"module"/i.test(attrs)) module = true;
+    // The HTML parser turns CRLF/CR into LF before CSP hashes the text, so hash what the browser sees.
+    const text = body.replace(/\r\n?/g, "\n");
+    sources.push(`'sha256-${createHash("sha256").update(text, "utf8").digest("base64")}'`);
   }
   if (!module) throw new Error("no inline module script found in index.html");
   return [
