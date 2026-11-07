@@ -9,7 +9,8 @@ import { createHash } from "node:crypto";
 // <meta> (CSP3 §3.3); GitHub Pages cannot set response headers.
 // style-src stays 'unsafe-inline' with no hashes: react-remove-scroll/react-style-singleton and sonner inject
 // <style> elements at runtime, and any hash in style-src would disable 'unsafe-inline'.
-const SCRIPT_RE = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
+// An end tag is "</script" followed by anything up to ">" (whitespace, junk attributes), as the HTML parser reads it.
+const SCRIPT_RE = /<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi;
 const attr = (attrs: string, name: string) => new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, "i").exec(attrs)?.[1];
 
 export function buildCsp(html: string): string {
