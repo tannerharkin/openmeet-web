@@ -16,7 +16,7 @@ Supported: OpenMeet (C610). OpenMeet 2 (C62x) is supported on a best-effort basi
 
 ## Usage
 
-Open the page in Chrome or Edge (WebHID is currently unavailable in Firefox or Safari), plug in your Loop120 dongle, and select **Connect dongle**. The browser will prompt you to select your Loop120 dongle. If you have the Shokz Connect app installed, please ensure to exit it entirely before using this tool as they will conflict.
+Open the page in Chrome or Edge on a computer (WebHID is currently unavailable in Firefox, Safari and on phones and tablets, which get a page explaining this with a button to send the link to a computer), plug in your Loop120 dongle, and select **Connect dongle**. The browser will prompt you to select your Loop120 dongle. If you have the Shokz Connect app installed, please ensure to exit it entirely before using this tool as they will conflict.
 
 ## Development
 

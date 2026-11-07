@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useStore } from "@/store";
 import { useTheme } from "@/hooks/use-theme";
-import { framed } from "@/lib/env";
+import { framed, hidSupported } from "@/lib/env";
 
 const PHASE_LABEL = { disconnected: "Not connected", unlinked: "Headset not linked", connected: "Connected" } as const;
 
@@ -50,7 +50,7 @@ export function Header() {
         {longRunning ? <Loader2 className="size-3 animate-spin motion-reduce:animate-none" aria-label="working" /> : null}
       </Badge>
       <div className="ml-auto flex items-center gap-1">
-        {framed ? null : phase === "disconnected" ? (
+        {framed || !hidSupported ? null : phase === "disconnected" ? (
           <Button onClick={() => void connect()} aria-describedby="connect-hint"><Usb aria-hidden /> Connect dongle</Button>
         ) : (
           <>

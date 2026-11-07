@@ -8,21 +8,22 @@ import { DevicesCard } from "@/components/devices-card";
 import { DetailsSection } from "@/components/details-section";
 import { Diagnostics } from "@/components/diagnostics";
 import { Unsupported } from "@/components/unsupported";
+import { MobileLanding } from "@/components/mobile-landing";
 import { useTheme } from "@/hooks/use-theme";
 import { useStore } from "@/store";
-import { framed } from "@/lib/env";
+import { framed, hidSupported, mobileWithoutHid } from "@/lib/env";
 
 export default function App() {
   const theme = useTheme((s) => s.theme);
   const { phase, busy } = useStore();
-  const supported = typeof navigator !== "undefined" && "hid" in navigator && window.isSecureContext;
+  if (mobileWithoutHid && !framed) return <MobileLanding />;
   return (
     <TooltipProvider>
       <div className="mx-auto max-w-3xl p-4 sm:p-6">
         <Header />
         {framed ? (
           <Unsupported reason="framed" />
-        ) : !supported ? (
+        ) : !hidSupported ? (
           <Unsupported />
         ) : (
           <main className="mt-6 space-y-4" aria-busy={!!busy}>
